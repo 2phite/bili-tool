@@ -13,6 +13,7 @@ import sys
 from .cache import fs_key, load_json, save_json
 from .config import Settings
 from .merge import build_bundle, write_bundle
+from .parts import count_parts, run_parts, select_parts
 from .quality import describe_failure, evaluate
 from .resolve import Canonical, resolve
 from .schema import Frame, Segment, Transcript
@@ -67,7 +68,10 @@ def _whisper(canonical, settings, args, *, reason, gate=None) -> Transcript:
     cached = load_json(settings.cache_dir, "transcript", key)
     if cached is not None:
         segments = [Segment(**s) for s in cached]
-        print(f"[{canonical.id} p{canonical.part}] whisper ({len(segments)} seg, cached): {reason}")
+        print(
+            f"[{canonical.id} p{canonical.part}] whisper "
+            f"({len(segments)} seg, cached): {reason}"
+        )
     else:
         print(f"[{canonical.id} p{canonical.part}] whisper: {reason} -> downloading audio...")
         audio = download_audio(canonical, settings)
@@ -153,12 +157,26 @@ def main(argv=None) -> int:
         settings.scene_threshold = args.scene_threshold
 
     canonical = resolve(args.url)
-    if args.part is not None:
-        canonical = Canonical(canonical.platform, canonical.id, args.part, canonical.url)
 
-    # --all-parts (D12) is a thin loop added with multi-part support; single-part for now.
-    process_part(canonical, settings, args)
-    return 0
+    # Enumerate parts once (cheap, no media), then run the single-part pipeline per selected
+    # part with failure isolation (D12). Bilibili returns the whole set as a playlist for the
+    # bare URL, so we always re-extract each part via its ?p=N URL inside process_part.
+    info = extract_info(canonical.url, settings)
+    total = count_parts(info)
+    parts = select_parts(args, canonical, total=total)
+    if len(parts) > 1:
+        print(f"[{canonical.id}] {total} parts; running {len(parts)} -> {parts}")
+
+    results = run_parts(
+        canonical, parts, settings=settings, args=args, processor=process_part
+    )
+
+    failed = [r for r in results if not r.ok]
+    if len(results) > 1 or failed:
+        for r in results:
+            status = "ok" if r.ok else f"FAILED ({r.error})"
+            print(f"[{canonical.id} p{r.part}] {status}")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

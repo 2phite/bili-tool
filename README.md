@@ -75,9 +75,18 @@ slide-chunked markdown), 32 tests green.
 - ✅ Vision captioning + D7 fingerprint-armed nonce-OCR projector check
 - ✅ Per-stage caching (D6: transcript/frames/captions) + D3 slide-chunked `bundle.md`
 
-**Known gaps (next):** `--all-parts` (D12) and `--no-frame-images`/`--scene-threshold` levers are
-parsed but not yet wired; the subtitle-accept + #6357 part-match path (D4) is built but untested on
-real subtitle-bearing content (the test lecture has none). `bilibili.tv` is unvalidated.
+- ✅ `--all-parts` (D12): per-part `?p=N` enumeration + failure isolation (validated on a real
+  3-part video, 3/3 parts ok)
+
+**Known gaps (next):** the `--no-frame-images`/`--scene-threshold` levers are parsed but not yet
+wired; the subtitle-accept + #6357 part-match path (D4) is built but untested on real
+subtitle-bearing content (none of the test videos carry subtitles). `bilibili.tv` is unvalidated.
+
+**Transcription backend:** uses local **faster-whisper** (HF `Systran/faster-whisper-large-v3`,
+CUDA). Routing Whisper through LM Studio (to unify with the vision endpoint) is **blocked** — as of
+2026-06-29 LM Studio exposes no STT API (no `/v1/audio/transcriptions`, no `lms` transcribe
+command), even with `whisper-large-v3-turbo` loaded. `transcribe.py` is kept swappable for when
+that endpoint ships.
 
 **Frame extraction note:** uses periodic sampling + perceptual dedup rather than the SPEC's
 scene-cut detection — the target content is continuous-shot slide recordings where scene cuts don't

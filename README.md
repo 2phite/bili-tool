@@ -1,6 +1,6 @@
 # bili-tool
 
-The **ingestion front-door** for a downstream knowledge-base project. Given a bilibili URL, it
+The **ingestion front-door** for a downstream knowledge base (the **Atlas** project). Given a bilibili URL, it
 produces a timeline-aligned **bundle**:
 
 - an **original-language transcript** (subtitle-reuse when trustworthy, else faster-whisper), and
@@ -66,7 +66,7 @@ granularity.
 
 ## Output
 
-`out/<id>-p<part>/` — `bundle.md` (the product the KB ingests: provenance header + slide-chunked
+`out/<id>-p<part>/` — `bundle.md` (the product the Atlas ingests: provenance header + slide-chunked
 transcript/visual notes), `bundle.json` (precise backing record), `frames/` (QA PNGs).
 
 ## Build status

@@ -18,7 +18,7 @@ without a `Referer` header, and most content needs a `SESSDATA` session cookie. 
 2026-06-28.
 
 So this tool is the **ingestion front-door** for a downstream knowledge-base project: it turns an
-otherwise-inaccessible bilibili URL into a clean, immutable, timeline-aligned **bundle** that the KB
+otherwise-inaccessible bilibili URL into a clean, immutable, timeline-aligned **bundle** that the Atlas
 layer ingests as a raw source. The tool's job **starts** at a URL and **ends** at that bundle. It does
 not summarize, extract entities, or write to the wiki — that judgment lives downstream. Keep this seam
 clean: bili-tool is a deterministic batch unit; everything interpretive happens elsewhere.
@@ -126,8 +126,8 @@ key silently ignores `--force-whisper`/`--scene-threshold`/`--robust`).
 
 ## 6. The bundle schema (interface contract — pin this, downstream depends on it)
 
-This is consumed by the KB project as a raw source landing in `raw/transcripts/`. Treat the shape as a
-stable API. **→ D1/D2: the KB actually ingests `bundle.md` (an LLM reads prose); `bundle.json` is the
+This is consumed by the Atlas project as a raw source landing in `raw/transcripts/`. Treat the shape as a
+stable API. **→ D1/D2: the Atlas actually ingests `bundle.md` (an LLM reads prose); `bundle.json` is the
 precise backing record, not the primary read. Provenance is promoted into a readable `bundle.md` header.
 The "canonical JSON / convenience markdown" framing below is inverted by D1 — keep the JSON precise, but
 the markdown is the product.** `bundle.json`:
@@ -163,7 +163,7 @@ the markdown is the product.** `bundle.json`:
 }
 ```
 
-**Why `transcript.source` matters:** the downstream KB does self-rewriting, auto-resolving contradiction
+**Why `transcript.source` matters:** the downstream Atlas does self-rewriting, auto-resolving contradiction
 handling, and it ranks competing claims by source authority. Provenance is that authority signal —
 `human-sub` > clean `whisper` > degraded `ai-zh`. This field is not cosmetic; it's an input to the wiki's
 reconciliation logic. Always populate it accurately.
@@ -187,7 +187,7 @@ JSON is canonical; the markdown is a convenience/QA artifact.
 - **`ai-zh` quality is a coin-flip on lectures.** Default heuristic is NOT "trust the sub." Run the
   **quality gate**: flag degraded subs by low punctuation density, high segment-duplication ratio (repetition),
   abnormal length-vs-duration, or high non-CJK garbage ratio → auto-fall-back to Whisper. In a compounding
-  KB, a subtly-wrong transcript is the worst failure mode (bad facts harden into accepted truth), so bias
+  Atlas, a subtly-wrong transcript is the worst failure mode (bad facts harden into accepted truth), so bias
   toward Whisper when in doubt. Keep `--force-whisper` as the manual override.
 - **faster-whisper repetition guard:** keep the default hallucination guards. Expose a `--robust` switch
   that disables `condition_on_previous_text` for lectures that degrade into repetition loops.
@@ -237,7 +237,7 @@ PNGs from `out/`; default ships them for QA).
 - Speaker diarization (lectures are single-speaker; skip WhisperX).
 - `.com` AI-vs-human subtitle flag filtering beyond the quality gate.
 - Translation tracks.
-- Any summarization / entity extraction / wiki integration — that's the downstream KB project's job.
+- Any summarization / entity extraction / wiki integration — that's the downstream Atlas project's job.
 
 ---
 
@@ -251,5 +251,5 @@ PNGs from `out/`; default ships them for QA).
 - Exact LM Studio endpoint URL + model name for Qwen3-VL (and confirm mmproj is loaded).
 - Where `SESSDATA` will be stored (env var vs `.env` vs cookies.txt export).
 - Scene-detection threshold default (tune on one real lecture during step 4).
-- Output root for bundles (the KB's `raw/transcripts/` lives in a separate repo — for now write to a local
-  `out/` and let the KB pull/copy; do NOT hardcode the wiki path here, keep the seam clean).
+- Output root for bundles (the Atlas's `raw/transcripts/` lives in a separate repo — for now write to a local
+  `out/` and let the Atlas pull/copy; do NOT hardcode the wiki path here, keep the seam clean).

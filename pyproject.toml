@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "bili-tool"
 version = "0.1.0"
-description = "Ingestion front-door: a bilibili URL -> a timeline-aligned transcript + per-frame visual-notes bundle for a downstream KB."
+description = "Ingestion front-door: a bilibili URL -> a timeline-aligned transcript + per-frame visual-notes bundle for a downstream knowledge base (Atlas)."
 requires-python = ">=3.11"
 readme = "README.md"
 

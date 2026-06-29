@@ -13,7 +13,7 @@ Status legend: **Locked** = decided; **Calibrate** = decided in principle, numbe
 ## D1 — Markdown is the ingestion surface; JSON is the backing record  · Locked
 **Touches:** §6, `merge.py`, `schema.py`
 
-`bundle.md` is what the downstream KB ingests, because the KB is an **LLM agent reading prose**, not code indexing fields (confirmed directly by the downstream-KB model). `bundle.json` is demoted from "the contract the KB reads" to a **precise machine-backing record** for re-alignment, caching, QA, and any future programmatic step.
+`bundle.md` is what the downstream Atlas ingests, because the Atlas is an **LLM agent reading prose**, not code indexing fields (confirmed directly by the downstream-Atlas model). `bundle.json` is demoted from "the contract the Atlas reads" to a **precise machine-backing record** for re-alignment, caching, QA, and any future programmatic step.
 
 - SPEC.md §6 currently calls the markdown a "convenience/QA artifact" — that is now **wrong**; invert it.
 - Do **not** over-engineer JSON leanness for an indexer that won't exist.
@@ -25,7 +25,7 @@ Status legend: **Locked** = decided; **Calibrate** = decided in principle, numbe
 ## D2 — Provenance promoted into a readable header  · Locked
 **Touches:** §6, `merge.py`
 
-The KB weighs provenance the way a model weighs any source's authority — there is no ranking algorithm reading `transcript.source`. So provenance must live **in the prose the model sees**: a header / frontmatter block at the top of `bundle.md`.
+The Atlas weighs provenance the way a model weighs any source's authority — there is no ranking algorithm reading `transcript.source`. So provenance must live **in the prose the model sees**: a header / frontmatter block at the top of `bundle.md`.
 
 - Header states the transcript source **and the decision reason**, e.g.
   `transcript_source: ai-zh (quality-gate: passed)` /
@@ -34,7 +34,7 @@ The KB weighs provenance the way a model weighs any source's authority — there
 - JSON still carries the structured `transcript.source` + `quality_gate` block, but the
   header is the load-bearing copy.
 
-**Why:** "build the schema as if a model reads the header, not as if code ranks fields" — the downstream KB's own guidance.
+**Why:** "build the schema as if a model reads the header, not as if code ranks fields" — the downstream Atlas's own guidance.
 
 ---
 
@@ -119,8 +119,8 @@ Mechanism — armed by **state change**, not the clock (single-user local box; t
 ## D8 — Delivered bundle is a self-contained directory; PNGs ship for QA  · Locked
 **Touches:** §4, §6, §11, `merge.py`, `frames.py`
 
-- Delivered unit = one **self-contained `out/<id>-p<part>/`** dir: `bundle.json` + `bundle.md` + `frames/`. Self-contained so the KB copies one folder with no dangling paths.
-- **Frame PNGs ship — but for *your* QA/reprocessing, not KB consumption.** The KB reads only the markdown (text); vision already turned each frame into OCR + caption. PNGs let you eyeball a suspicious caption and re-caption without re-extracting.
+- Delivered unit = one **self-contained `out/<id>-p<part>/`** dir: `bundle.json` + `bundle.md` + `frames/`. Self-contained so the Atlas copies one folder with no dangling paths.
+- **Frame PNGs ship — but for *your* QA/reprocessing, not Atlas consumption.** The Atlas reads only the markdown (text); vision already turned each frame into OCR + caption. PNGs let you eyeball a suspicious caption and re-caption without re-extracting.
 - **`cache/`** holds the expensive intermediates (raw audio, full pre-dedup frame set), gitignored. Deduped/captioned frames are copied/hardlinked into the delivery dir.
 - Optional `--no-frame-images` lever omits PNGs from `out/` (JSON still records `phash`/`ts`/`caption`). Default = ship them.
 

@@ -1,4 +1,4 @@
-"""The bundle interface contract (SPEC §6). Downstream KB depends on this shape — treat as a
+"""The bundle interface contract (SPEC §6). Downstream Atlas depends on this shape — treat as a
 stable API. bundle.md is the primary ingestion surface (D1); this JSON is the precise backing
 record. Bump SCHEMA_VERSION on any breaking change to the field shape.
 """

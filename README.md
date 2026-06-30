@@ -44,9 +44,12 @@ commit it.
 
 ## Usage
 
+`bili-tool` is verb-based (D14): `ingest` runs the full pipeline, `probe` is a cheap metadata
+pre-flight. There is no bare-url form.
+
 ```bash
-bili-tool <url> [--part N] [--all-parts] [--force-whisper] [--robust] [--no-vision]
-                [--dedup-threshold N] [--out DIR] [--no-frame-images]
+bili-tool ingest <url> [--part N] [--all-parts] [--force-whisper] [--robust] [--no-vision]
+                       [--dedup-threshold N] [--out DIR] [--no-frame-images]
 ```
 
 Defaults: auto part detection, quality-gated subtitle→Whisper decision, vision on.
@@ -64,10 +67,25 @@ Defaults: auto part detection, quality-gated subtitle→Whisper decision, vision
 periodic sampling + phash dedup); it warns and no-ops. Use `--dedup-threshold` to tune frame
 granularity.
 
+```bash
+bili-tool probe <url>
+```
+
+`probe` takes only a URL (no flags) and prints a single-line `ProbeResult` JSON object to stdout
+(diagnostics/errors go to stderr) — title, uploader, total/per-part duration, part count — so a
+caller can estimate workload before committing to a full `ingest` run. `bilibili.com` only;
+`.tv` is rejected with a nonzero exit (D15). See [PROTOCOL.md](PROTOCOL.md) for the full
+downstream-facing contract (exact JSON shape, nullability, exit codes).
+
 ## Output
 
 `out/<id>-p<part>/` — `bundle.md` (the product the Atlas ingests: provenance header + slide-chunked
 transcript/visual notes), `bundle.json` (precise backing record), `frames/` (QA PNGs).
+
+`bundle.json` is schema version **1.1**, which added two nullable fields versus 1.0:
+`uploader_mid` (uploader's numeric bilibili member id) and `description` (video description) —
+both sourced from the player-API `view` call (D15) and `null` when it's unavailable. See
+[PROTOCOL.md](PROTOCOL.md) for the field-by-field contract Atlas should code against.
 
 ## Build status
 

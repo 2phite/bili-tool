@@ -200,6 +200,63 @@ implements.
 
 ---
 
+## D14 — CLI verb grammar; clean break of the bare-url form  · Locked
+**Touches:** §9, `cli.py`
+
+`bili-tool <url> [flags]` is replaced by required verbs: `bili-tool ingest <url> [flags]` (the
+existing full pipeline) and `bili-tool probe <url>` (new, D15). The bare-url form is **removed**,
+not kept as a deprecated alias.
+
+- **Why a verb at all:** `probe` (cheap metadata, no media) and `ingest` (full pipeline) are
+  fundamentally different operations with different cost/output, and more verbs are coming —
+  `download`-only, and eventually a non-bilibili (e.g. YouTube) source. A source-agnostic verb
+  grammar (`bili-tool <verb> <url>`) is the shape that scales to that future; a bare positional
+  URL only scales to "one verb, one platform."
+- **Why break it now instead of keeping `bili-tool <url>` as shorthand for `ingest`:** v0.1.0,
+  pre-1.0, is the cheapest possible moment to change the invocation shape — there is exactly one
+  known consumer (the downstream Atlas), and it's updated in lockstep with this change (see
+  PROTOCOL.md). A default-subcommand shim (bare URL silently means `ingest`) was considered and
+  **rejected**: it would let `ingest`'s and `probe`'s argument surfaces silently overlap/drift,
+  and it preserves exactly the ambiguity a verb grammar exists to remove. Paying the one-time
+  break cost now is cheaper than carrying a shim indefinitely.
+
+**Why:** adopt the grammar once, while the only caller can be updated for free, rather than
+retrofitting it after a second verb or platform forces the issue.
+
+---
+
+## D15 — `view` as the single source of truth; the `probe` contract  · Locked
+**Touches:** §6, §9, `player_api.py`, `probe.py`, `schema.py`, `cli.py`
+
+`web-interface/view` (`player_api.fetch_view`, introduced for the subtitle path in build-time
+resolutions above) is one cheap, cookie-authenticated GET that already returns title, owner
+mid/name, description, total duration, and per-part (page) durations in a single call. `probe()`
+(`probe.py`) maps that response onto `ProbeResult` (`schema.py`) and is exposed as the `bili-tool
+probe <url>` verb (D14): JSON to stdout only, diagnostics/errors to stderr, so a caller can pipe
+stdout straight into a JSON parser.
+
+- **`view` is the metadata source of truth** for both `probe` and `ingest`'s bundle metadata —
+  not yt-dlp. yt-dlp's `extract_info` remains a **graceful fallback** for the fields it and
+  `view` overlap on (title/uploader/duration): if `fetch_view` fails (`ViewError`), `ingest`
+  falls back to yt-dlp-derived metadata rather than failing the whole part. `probe` has no such
+  fallback — it has nothing else to report, so a `view` failure is a `probe` failure (D14's
+  separation of concerns: `probe` *is* "ask view").
+- **`uploader_mid` and `description` are view-only fields** (schema 1.1, additive/nullable) —
+  yt-dlp doesn't surface them, so they are `null` whenever `view` itself is unavailable.
+- **`bilibili.tv` is deferred, not stubbed:** there is no player-API `view` endpoint for `.tv`
+  yet. `probe()` raises `ValueError` for `.tv` before any HTTP call (PROTOCOL.md). `ingest` keeps
+  working for `.tv` by falling back fully to the yt-dlp-only path (part-count via playlist
+  entries) — only the cheap pre-flight probe is unavailable there, not ingestion itself.
+
+**Why:** one authenticated call replaces what would otherwise be several yt-dlp probes to
+assemble the same facts, and gives `probe` a workload estimate (parts + per-part durations) yt-dlp
+alone can't cheaply provide without walking the playlist. Falling back to yt-dlp for `ingest`'s
+overlap fields keeps a transient `view` hiccup from failing a whole part when the pipeline has
+another way to get "good enough" metadata; `probe` doesn't get that luxury because reporting
+metadata is its only job.
+
+---
+
 ## Build-time resolutions (settled 2026-06-28, per the deferred list below)
 - **faster-whisper:** pinned `1.2.1` (current stable). CUDA on Windows via the `nvidia-cublas/cudnn/
   cuda-runtime-cu12` wheels, registered on PATH (ctranslate2 uses plain `LoadLibrary`).

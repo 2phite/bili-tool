@@ -16,6 +16,7 @@ import json
 import urllib.request
 
 import yt_dlp
+from pydantic import BaseModel
 
 from .config import REFERER, Settings
 from .resolve import Canonical
@@ -27,9 +28,49 @@ _API_PLAYER = "https://api.bilibili.com/x/player/v2?aid={aid}&cid={cid}&bvid={bv
 _UA = "Mozilla/5.0"
 
 
-def cid_for_part(view_data: dict, part: int) -> int | None:
-    """Map a 1-based part to its cid from web-interface/view `pages` (page-number match first,
-    then positional index), falling back to the top-level cid for a single-part video."""
+class ViewError(Exception):
+    """Raised when web-interface/view responds with a non-zero `code`."""
+
+
+class ViewPage(BaseModel):
+    """One entry of a (possibly multi-part) video, from `data.pages[]` (or synthesized)."""
+
+    part: int
+    cid: int
+    title: str | None = None
+    duration: int | None = None
+
+
+class ViewData(BaseModel):
+    """Parsed `web-interface/view` response: the single source of truth for video metadata."""
+
+    aid: int
+    cid: int
+    title: str | None = None
+    desc: str | None = None
+    duration: int | None = None
+    owner_mid: int | None = None
+    owner_name: str | None = None
+    pages: list[ViewPage] = []
+
+
+def cid_for_part(view_data: ViewData | dict, part: int) -> int | None:
+    """Map a 1-based part to its cid from `ViewData.pages` (page-number match first, then
+    positional index), falling back to the top-level cid for a single-part video.
+
+    Accepts either a `ViewData` or the raw `data` dict (legacy callers/tests).
+    """
+    if isinstance(view_data, ViewData):
+        pages = view_data.pages
+        for pg in pages:
+            if pg.part == part:
+                return pg.cid
+        if 1 <= part <= len(pages):
+            return pages[part - 1].cid
+        if part == 1:
+            return view_data.cid
+        return None
+
     pages = view_data.get("pages") or []
     for pg in pages:
         if pg.get("page") == part:
@@ -69,6 +110,51 @@ def _get_json(opener, url: str) -> dict:
     return json.loads(opener.open(url, timeout=60).read().decode("utf-8"))
 
 
+def fetch_view(canonical: Canonical, settings: Settings, *, opener=None) -> ViewData:
+    """Fetch + parse `web-interface/view` for this video: one GET, the single source of truth
+    for title/owner/desc/duration/pages.
+
+    Raises `ViewError` when the response's `code != 0`. `opener` is injectable for tests;
+    production builds one carrying the live cookies.
+    """
+    op = opener or _opener(settings)
+    view = _get_json(op, _API_VIEW.format(bvid=canonical.id))
+    if view.get("code") != 0:
+        raise ViewError(f"web-interface/view error: code={view.get('code')!r}, "
+                         f"message={view.get('message')!r}")
+
+    data = view.get("data") or {}
+    owner = data.get("owner") or {}
+    desc = data.get("desc") or None
+
+    raw_pages = data.get("pages") or []
+    if raw_pages:
+        pages = [
+            ViewPage(
+                part=pg.get("page"),
+                cid=pg.get("cid"),
+                title=pg.get("part"),
+                duration=pg.get("duration"),
+            )
+            for pg in raw_pages
+        ]
+    else:
+        pages = [
+            ViewPage(part=1, cid=data.get("cid"), title=None, duration=data.get("duration"))
+        ]
+
+    return ViewData(
+        aid=data.get("aid"),
+        cid=data.get("cid"),
+        title=data.get("title"),
+        desc=desc,
+        duration=data.get("duration"),
+        owner_mid=owner.get("mid"),
+        owner_name=owner.get("name"),
+        pages=pages,
+    )
+
+
 def part_segments(
     canonical: Canonical, settings: Settings, *, opener=None
 ) -> tuple[str, list[Segment]] | None:
@@ -79,12 +165,12 @@ def part_segments(
     """
     op = opener or _opener(settings)
 
-    view = _get_json(op, _API_VIEW.format(bvid=canonical.id))
-    if view.get("code") != 0:
+    try:
+        view = fetch_view(canonical, settings, opener=op)
+    except ViewError:
         return None
-    vdata = view.get("data") or {}
-    aid = vdata.get("aid")
-    cid = cid_for_part(vdata, canonical.part)
+    aid = view.aid
+    cid = cid_for_part(view, canonical.part)
     if not (aid and cid):
         return None
 

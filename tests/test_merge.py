@@ -1,12 +1,30 @@
 import json
 
 from bili_tool.config import Settings
-from bili_tool.merge import chunk, write_bundle
+from bili_tool.merge import build_bundle, chunk, render_markdown, write_bundle
+from bili_tool.player_api import ViewData
+from bili_tool.resolve import Canonical
 from bili_tool.schema import Bundle, Frame, Meta, Segment, Transcript
 
 
 def _seg(start, end, text="x"):
     return Segment(start=start, end=end, text=text)
+
+
+def _canonical():
+    return Canonical(
+        platform="bilibili.com", id="BV1", part=1, url="https://b/video/BV1"
+    )
+
+
+def _transcript():
+    return Transcript(source="whisper", source_reason="test", segments=[])
+
+
+def _settings():
+    s = Settings()
+    s.tool_version = "t"
+    return s
 
 
 def _bundle_with_frame(rel_path):
@@ -90,3 +108,110 @@ def test_empty_chunks_dropped():
     segs = [_seg(105, 110)]
     chunks = chunk(segs, frames, window_s=75.0, duration_s=120.0)
     assert all(c.segments or c.frames for c in chunks)
+
+
+def test_build_bundle_with_view_present_wins_over_ytdlp():
+    view = ViewData(
+        aid=1,
+        cid=2,
+        title="View Title",
+        desc="View description.",
+        duration=123,
+        owner_mid=999,
+        owner_name="View Owner",
+        pages=[],
+    )
+    info = {
+        "title": "ytdlp title",
+        "uploader": "ytdlp uploader",
+        "duration": 456,
+        "description": "ytdlp description",
+    }
+    bundle = build_bundle(
+        _canonical(), info, _transcript(), [], _settings(), view=view
+    )
+    assert bundle.title == "View Title"
+    assert bundle.uploader == "View Owner"
+    assert bundle.duration_s == 123
+    assert bundle.uploader_mid == 999
+    assert bundle.description == "View description."
+
+
+def test_build_bundle_with_view_none_falls_back_to_ytdlp():
+    info = {
+        "title": "ytdlp title",
+        "uploader": "ytdlp uploader",
+        "duration": 456,
+        "description": "ytdlp description",
+    }
+    bundle = build_bundle(
+        _canonical(), info, _transcript(), [], _settings(), view=None
+    )
+    assert bundle.title == "ytdlp title"
+    assert bundle.uploader == "ytdlp uploader"
+    assert bundle.duration_s == 456
+    assert bundle.uploader_mid is None
+    assert bundle.description == "ytdlp description"
+
+
+def test_render_markdown_emits_uploader_mid_and_description_section():
+    bundle = Bundle(
+        platform="bilibili.com",
+        id="BV1",
+        part=1,
+        url="https://b/video/BV1",
+        title="My Title",
+        uploader="My Uploader",
+        uploader_mid=42,
+        description="Line one.\n\nLine two with a URL: https://example.com",
+        fetched_at="2026-06-29T00:00:00Z",
+        transcript=Transcript(source="whisper", source_reason="test", segments=[_seg(0, 5)]),
+        frames=[],
+        meta=Meta(cookies_used=False, referer_used=True, tool_version="t"),
+    )
+    md = render_markdown(bundle, _settings())
+    assert "uploader_mid: 42" in md
+    lines = md.splitlines()
+    uploader_idx = next(i for i, l in enumerate(lines) if l.startswith("uploader:"))
+    mid_idx = next(i for i, l in enumerate(lines) if l.startswith("uploader_mid:"))
+    assert mid_idx == uploader_idx + 1
+    assert "## Description" in md
+    assert "Line one." in md
+    assert "Line two with a URL: https://example.com" in md
+    # Description section appears after the H1 and before the transcript body.
+    h1_idx = next(i for i, l in enumerate(lines) if l.startswith("# "))
+    desc_idx = next(i for i, l in enumerate(lines) if l == "## Description")
+    transcript_idx = next(i for i, l in enumerate(lines) if l.startswith("## ["))
+    assert h1_idx < desc_idx < transcript_idx
+
+
+def test_render_markdown_omits_description_section_when_none():
+    bundle = Bundle(
+        platform="bilibili.com",
+        id="BV1",
+        part=1,
+        url="https://b/video/BV1",
+        title="My Title",
+        uploader="My Uploader",
+        fetched_at="2026-06-29T00:00:00Z",
+        transcript=Transcript(source="whisper", source_reason="test", segments=[_seg(0, 5)]),
+        frames=[],
+        meta=Meta(cookies_used=False, referer_used=True, tool_version="t"),
+    )
+    md = render_markdown(bundle, _settings())
+    assert "## Description" not in md
+    assert "uploader_mid: " in md  # still emitted, empty
+
+
+def test_bundle_json_roundtrips_new_fields(tmp_path):
+    bundle = _bundle_with_frame(None)
+    bundle.uploader_mid = 123
+    bundle.description = "desc text"
+    settings = Settings()
+    settings.out_dir = tmp_path / "out"
+
+    out = write_bundle(bundle, settings, frame_sources={}, frame_images=False)
+
+    data = json.loads((out / "bundle.json").read_text(encoding="utf-8"))
+    assert data["uploader_mid"] == 123
+    assert data["description"] == "desc text"

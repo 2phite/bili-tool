@@ -1,6 +1,8 @@
 """The bundle interface contract (SPEC §6). Downstream Atlas depends on this shape — treat as a
 stable API. bundle.md is the primary ingestion surface (D1); this JSON is the precise backing
 record. Bump SCHEMA_VERSION on any breaking change to the field shape.
+
+1.1 added `uploader_mid` and `description` (additive, nullable — backward compatible).
 """
 
 from __future__ import annotations
@@ -9,7 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
 
 Platform = Literal["bilibili.com", "bilibili.tv"]
 TranscriptSource = Literal["human-sub", "ai-zh", "whisper"]
@@ -70,6 +72,8 @@ class Bundle(BaseModel):
     url: str
     title: str | None = None
     uploader: str | None = None
+    uploader_mid: int | None = None
+    description: str | None = None
     duration_s: int | None = None
     fetched_at: str  # ISO 8601 UTC, e.g. "2026-06-28T12:00:00Z"
     transcript: Transcript

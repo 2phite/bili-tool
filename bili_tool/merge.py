@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import Settings
+from .player_api import ViewData
 from .resolve import Canonical
 from .schema import Bundle, Frame, Meta, Segment, Transcript
 
@@ -63,16 +64,25 @@ def build_bundle(
     frames: list[Frame],
     settings: Settings,
     *,
+    view: ViewData | None = None,
     vision_model: str | None = None,
 ) -> Bundle:
-    duration = info.get("duration")
+    """`view` (web-interface/view) is the metadata source of truth; yt-dlp `info` is the
+    fallback when `view` wasn't fetched (Task 4 threads the real value)."""
+    title = view.title if view else info.get("title")
+    uploader = view.owner_name if view else info.get("uploader")
+    duration = view.duration if view else info.get("duration")
+    uploader_mid = view.owner_mid if view else None
+    description = view.desc if view else info.get("description")
     return Bundle(
         platform=canonical.platform,
         id=canonical.id,
         part=canonical.part,
         url=canonical.url,
-        title=info.get("title"),
-        uploader=info.get("uploader"),
+        title=title,
+        uploader=uploader,
+        uploader_mid=uploader_mid,
+        description=description,
         duration_s=int(duration) if duration else None,
         fetched_at=iso_now(),
         transcript=transcript,
@@ -97,6 +107,7 @@ def render_markdown(bundle: Bundle, settings: Settings) -> str:
         f"url: {bundle.url}",
         f"title: {bundle.title or ''}",
         f"uploader: {bundle.uploader or ''}",
+        f"uploader_mid: {bundle.uploader_mid if bundle.uploader_mid is not None else ''}",
         f"duration: {dur}",
         f"fetched_at: {bundle.fetched_at}",
         f"transcript_source: {t.source} ({t.source_reason})",
@@ -107,6 +118,12 @@ def render_markdown(bundle: Bundle, settings: Settings) -> str:
         f"# {bundle.title or bundle.id}",
         "",
     ]
+
+    if bundle.description:
+        lines.append("## Description")
+        lines.append("")
+        lines.append(bundle.description)
+        lines.append("")
 
     if not t.segments and not bundle.frames:
         lines.append("_(no transcript yet — Whisper pending)_")

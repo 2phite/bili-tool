@@ -146,7 +146,7 @@ def process_part(canonical: Canonical, settings: Settings, args) -> None:
             vision_model = settings.lmstudio_vision_model
 
     bundle = build_bundle(
-        canonical, info, transcript, frames, settings, vision_model=vision_model
+        canonical, info, transcript, frames, settings, view=None, vision_model=vision_model
     )
     out = write_bundle(
         bundle, settings, frame_sources=frame_sources, frame_images=not args.no_frame_images

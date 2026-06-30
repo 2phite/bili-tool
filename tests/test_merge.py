@@ -203,6 +203,66 @@ def test_render_markdown_omits_description_section_when_none():
     assert "uploader_mid: " in md  # still emitted, empty
 
 
+def test_render_markdown_description_with_literal_dashes_and_hash_line_is_safe():
+    """A description containing a line that is exactly `---` (a YAML/HR delimiter) and a line
+    starting with `#` (looks like a heading) must not corrupt the frontmatter block or be
+    misread as a new section. The frontmatter stays exactly the intended scalar lines, and the
+    description text appears verbatim, in full, inside the ## Description body."""
+    description = "Intro line.\n---\n# Not a real heading\nTrailing line."
+    bundle = Bundle(
+        platform="bilibili.com",
+        id="BV1",
+        part=1,
+        url="https://b/video/BV1",
+        title="My Title",
+        uploader="My Uploader",
+        uploader_mid=42,
+        description=description,
+        fetched_at="2026-06-29T00:00:00Z",
+        transcript=Transcript(source="whisper", source_reason="test", segments=[_seg(0, 5)]),
+        frames=[],
+        meta=Meta(cookies_used=False, referer_used=True, tool_version="t"),
+    )
+    md = render_markdown(bundle, _settings())
+    lines = md.splitlines()
+
+    # Frontmatter: a parser reads from the first `---` to the *next* `---` it meets. That
+    # block must be exactly the intended scalar lines -- the adversarial `---` inside the
+    # description (which necessarily comes later, after the H1 and `## Description` heading)
+    # must not be mistaken for the close fence, and nothing from the description must leak
+    # into it.
+    assert lines[0] == "---"
+    close_idx = lines.index("---", 1)
+    frontmatter = lines[1:close_idx]
+    assert frontmatter == [
+        "platform: bilibili.com",
+        "id: BV1",
+        "part: 1",
+        "url: https://b/video/BV1",
+        "title: My Title",
+        "uploader: My Uploader",
+        "uploader_mid: 42",
+        "duration: ?",
+        "fetched_at: 2026-06-29T00:00:00Z",
+        "transcript_source: whisper (test)",
+        "vision_model: none",
+        "tool_version: t",
+    ]
+
+    # The description text appears verbatim (each of its lines, in order) inside the
+    # ## Description section, after the H1.
+    h1_idx = next(i for i, l in enumerate(lines) if l.startswith("# "))
+    desc_idx = next(i for i, l in enumerate(lines) if l == "## Description")
+    assert h1_idx < desc_idx
+    assert "Intro line." in md
+    assert "Not a real heading" in md
+    assert "Trailing line." in md
+    body_after_desc = "\n".join(lines[desc_idx:])
+    assert description in body_after_desc or all(
+        part in body_after_desc for part in description.split("\n")
+    )
+
+
 def test_bundle_json_roundtrips_new_fields(tmp_path):
     bundle = _bundle_with_frame(None)
     bundle.uploader_mid = 123

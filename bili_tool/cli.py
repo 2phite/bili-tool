@@ -225,8 +225,8 @@ def _run_probe(args) -> int:
     stderr so a caller can safely parse stdout as JSON. `probe` takes only a url (no levers),
     so `apply_overrides` doesn't apply here."""
     settings = Settings.load()
-    canonical = resolve(args.url)
     try:
+        canonical = resolve(args.url)
         result = probe(canonical, settings)
     except (ViewError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -241,7 +241,11 @@ def _run_ingest(args) -> int:
     for w in apply_overrides(settings, args):
         print(f"[warn] {w}")
 
-    canonical = resolve(args.url)
+    try:
+        canonical = resolve(args.url)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
 
     # Enumerate parts once (cheap, no media), then run the single-part pipeline per selected
     # part with failure isolation (D12). `view.pages` is the single source of truth for part

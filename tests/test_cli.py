@@ -128,6 +128,26 @@ def test_probe_path_prints_only_json_to_stdout(monkeypatch, capsys):
     assert captured.out.strip().count("\n") == 0
 
 
+def test_probe_malformed_url_exits_1_with_error_on_stderr_and_clean_stdout(capsys):
+    """resolve() raises ValueError for a malformed URL; `probe` must catch it like any other
+    pre-flight failure: exit 1, `error: ...` on stderr, stdout stays empty (PROTOCOL.md)."""
+    rc = main(["probe", "https://example.com/not-bilibili"])
+    assert rc == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith("error: ")
+
+
+def test_ingest_malformed_url_exits_nonzero_with_error_on_stderr(capsys):
+    """Same contract for `ingest`: a bad URL must not raise an uncaught traceback."""
+    rc = main(["ingest", "https://example.com/not-bilibili"])
+    assert rc != 0
+
+    captured = capsys.readouterr()
+    assert captured.err.startswith("error: ")
+
+
 def test_ingest_enumerates_parts_from_view_pages(monkeypatch):
     """--all-parts on a .com URL must derive its part count from `view.pages`, not yt-dlp."""
     from bili_tool import cli

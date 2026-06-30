@@ -180,6 +180,61 @@ def test_fetch_view_empty_desc_becomes_none():
     assert view.desc is None
 
 
+def test_fetch_view_raises_view_error_on_malformed_pages_entry():
+    """An upstream `pages[]` entry missing `page` makes `ViewPage(part=...)` get `None`,
+    which pydantic rejects (`part: int`). That parse failure must surface as `ViewError`
+    (chained), never a bare `pydantic.ValidationError` escaping into callers that only
+    catch `ViewError` (process_part, _run_probe)."""
+    from pydantic import ValidationError
+
+    canonical = _canonical()
+    payload = {
+        "code": 0,
+        "data": {
+            "aid": 42,
+            "cid": 100,
+            "title": "Malformed",
+            "desc": "d",
+            "duration": 600,
+            "owner": {"mid": 7, "name": "Uploader"},
+            "pages": [
+                {"cid": 100, "part": "Part One", "duration": 300},  # "page" key missing
+            ],
+        },
+    }
+    opener = _FakeOpener({_view_url(canonical): payload})
+
+    with pytest.raises(ViewError) as excinfo:
+        fetch_view(canonical, Settings(), opener=opener)
+
+    assert not isinstance(excinfo.value, ValidationError)
+    assert excinfo.value.__cause__ is not None
+
+
+def test_part_segments_returns_none_on_malformed_view_pages_entry():
+    """The same malformed response must degrade `part_segments` to None, not raise."""
+    from bili_tool.player_api import part_segments
+
+    canonical = _canonical(part=1)
+    payload = {
+        "code": 0,
+        "data": {
+            "aid": 42,
+            "cid": 100,
+            "title": "Malformed",
+            "desc": "d",
+            "duration": 600,
+            "owner": {"mid": 7, "name": "Uploader"},
+            "pages": [
+                {"cid": 100, "part": "Part One", "duration": 300},  # "page" key missing
+            ],
+        },
+    }
+    opener = _FakeOpener({_view_url(canonical): payload})
+    result = part_segments(canonical, Settings(), opener=opener)
+    assert result is None
+
+
 def test_fetch_view_raises_view_error_on_nonzero_code():
     canonical = _canonical()
     payload = {"code": -400, "message": "request error"}

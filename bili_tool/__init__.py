@@ -2,7 +2,9 @@
 
 __version__ = "0.1.0"
 
-from .probe import probe  # noqa: E402  (after __version__: config.py imports it back from here)
+# Deferred (E402): __version__ must be defined first, since config.py (imported transitively
+# by probe/schema below) reads it back via `from . import __version__`.
+from .probe import probe  # noqa: E402
 from .schema import ProbeResult  # noqa: E402
 
 __all__ = ["__version__", "probe", "ProbeResult"]

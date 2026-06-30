@@ -16,7 +16,7 @@ import json
 import urllib.request
 
 import yt_dlp
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from .config import REFERER, Settings
 from .resolve import Canonical
@@ -114,32 +114,37 @@ def fetch_view(canonical: Canonical, settings: Settings, *, opener=None) -> View
     owner = data.get("owner") or {}
     desc = data.get("desc") or None
 
-    raw_pages = data.get("pages") or []
-    if raw_pages:
-        pages = [
-            ViewPage(
-                part=pg.get("page"),
-                cid=pg.get("cid"),
-                title=pg.get("part"),
-                duration=pg.get("duration"),
-            )
-            for pg in raw_pages
-        ]
-    else:
-        pages = [
-            ViewPage(part=1, cid=data.get("cid"), title=None, duration=data.get("duration"))
-        ]
+    try:
+        raw_pages = data.get("pages") or []
+        if raw_pages:
+            pages = [
+                ViewPage(
+                    part=pg.get("page"),
+                    cid=pg.get("cid"),
+                    title=pg.get("part"),
+                    duration=pg.get("duration"),
+                )
+                for pg in raw_pages
+            ]
+        else:
+            pages = [
+                ViewPage(part=1, cid=data.get("cid"), title=None, duration=data.get("duration"))
+            ]
 
-    return ViewData(
-        aid=data.get("aid"),
-        cid=data.get("cid"),
-        title=data.get("title"),
-        desc=desc,
-        duration=data.get("duration"),
-        owner_mid=owner.get("mid"),
-        owner_name=owner.get("name"),
-        pages=pages,
-    )
+        return ViewData(
+            aid=data.get("aid"),
+            cid=data.get("cid"),
+            title=data.get("title"),
+            desc=desc,
+            duration=data.get("duration"),
+            owner_mid=owner.get("mid"),
+            owner_name=owner.get("name"),
+            pages=pages,
+        )
+    except ValidationError as exc:
+        raise ViewError(
+            f"web-interface/view returned an unparseable shape: {exc}"
+        ) from exc
 
 
 def part_segments(

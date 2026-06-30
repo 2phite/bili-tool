@@ -1,4 +1,4 @@
-from bili_tool.parts import PartResult, count_parts, part_url, run_parts, select_parts
+from bili_tool.parts import PartResult, part_url, run_parts, select_parts
 from bili_tool.resolve import Canonical
 
 
@@ -14,15 +14,6 @@ def test_part_url_replaces_existing_part():
         part_url("https://www.bilibili.com/video/BV1XY411o7Cv?p=2", 5)
         == "https://www.bilibili.com/video/BV1XY411o7Cv?p=5"
     )
-
-
-def test_count_parts_reads_playlist_entries():
-    info = {"_type": "playlist", "entries": [{}, {}, {}]}
-    assert count_parts(info) == 3
-
-
-def test_count_parts_single_video_is_one():
-    assert count_parts({"title": "x", "duration": 10}) == 1
 
 
 def test_select_parts_all():

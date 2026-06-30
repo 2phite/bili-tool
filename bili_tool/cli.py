@@ -8,37 +8,60 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import sys
 
 from .cache import fs_key, load_json, save_json
 from .config import Settings
 from .merge import build_bundle, write_bundle
-from .parts import count_parts, part_url, run_parts, select_parts
+from .parts import part_url, run_parts, select_parts
+from .player_api import ViewData, ViewError, fetch_view
+from .probe import probe
 from .quality import describe_failure, evaluate
 from .resolve import Canonical, resolve
 from .schema import Frame, Segment, Transcript
-from .subtitles import extract_info, fetch_subtitle_segments, probe
+from .subtitles import extract_info, fetch_subtitle_segments
+from .subtitles import probe as subtitle_probe
 from .transcribe import WHISPER_MODEL, download_audio, transcribe
+
+# NOTE: `probe` here is the metadata pre-flight probe (probe.py), used by the `probe` CLI verb
+# and overridable as `cli.probe` in tests. The SUBTITLE quality probe (subtitles.py) is imported
+# as `subtitle_probe` to avoid the name clash.
 
 
 def parse_args(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="bili-tool", description=__doc__)
-    p.add_argument("url")
-    p.add_argument("--part", type=int, default=None, help="1-based part index (default: from URL)")
-    p.add_argument("--all-parts", action="store_true", help="loop every part (D12)")
-    p.add_argument("--force-whisper", action="store_true", help="skip subtitle, always Whisper")
-    p.add_argument("--robust", action="store_true", help="disable condition_on_previous_text")
-    p.add_argument("--no-vision", action="store_true", help="skip frame captioning")
-    p.add_argument(
+    sub = p.add_subparsers(dest="command", required=True)
+
+    ingest = sub.add_parser("ingest", help="run the full ingest pipeline for a video/part")
+    ingest.add_argument("url")
+    ingest.add_argument(
+        "--part", type=int, default=None, help="1-based part index (default: from URL)"
+    )
+    ingest.add_argument("--all-parts", action="store_true", help="loop every part (D12)")
+    ingest.add_argument(
+        "--force-whisper", action="store_true", help="skip subtitle, always Whisper"
+    )
+    ingest.add_argument(
+        "--robust", action="store_true", help="disable condition_on_previous_text"
+    )
+    ingest.add_argument("--no-vision", action="store_true", help="skip frame captioning")
+    ingest.add_argument(
         "--dedup-threshold", type=int, default=None,
         help="phash hamming distance to collapse near-duplicate frames (default: 10)",
     )
-    p.add_argument(
+    ingest.add_argument(
         "--scene-threshold", type=float, default=None,
         help="DEPRECATED, ignored (D13 replaced scene-cut detection); use --dedup-threshold",
     )
-    p.add_argument("--out", default=None, help="output root (default: ./out)")
-    p.add_argument("--no-frame-images", action="store_true", help="omit PNGs from out/ (D8)")
+    ingest.add_argument("--out", default=None, help="output root (default: ./out)")
+    ingest.add_argument(
+        "--no-frame-images", action="store_true", help="omit PNGs from out/ (D8)"
+    )
+
+    probe_cmd = sub.add_parser("probe", help="cheap pre-flight metadata probe, no media")
+    probe_cmd.add_argument("url")
+
     return p.parse_args(argv)
 
 
@@ -59,11 +82,17 @@ def apply_overrides(settings: Settings, args) -> list[str]:
     return warnings
 
 
-def decide_transcript(info: dict, canonical: Canonical, settings: Settings, args) -> Transcript:
+def decide_transcript(
+    info: dict, canonical: Canonical, settings: Settings, args, *, view: ViewData | None = None
+) -> Transcript:
     if args.force_whisper:
         return _whisper(canonical, settings, args, reason="forced via --force-whisper")
 
-    sub = probe(info, canonical, settings, part1_segments=_part1_segments(canonical, settings))
+    sub = subtitle_probe(
+        info, canonical, settings,
+        part1_segments=_part1_segments(canonical, settings),
+        view=view,
+    )
     if not sub.found:
         return _whisper(
             canonical, settings, args, reason=f"no usable subtitle ({sub.reason})"
@@ -128,8 +157,18 @@ def _whisper(canonical, settings, args, *, reason, gate=None) -> Transcript:
 
 
 def process_part(canonical: Canonical, settings: Settings, args) -> None:
+    """Run the single-part pipeline. Fetches `ViewData` at most once (Task 4: one fetch per
+    part) and shares it between `build_bundle` and the subtitle-cid path (`decide_transcript`).
+    `.tv` has no player-API view endpoint yet (deferred), so it stays on the yt-dlp-only path."""
+    view: ViewData | None = None
+    if canonical.platform == "bilibili.com":
+        try:
+            view = fetch_view(canonical, settings)
+        except ViewError:
+            view = None
+
     info = extract_info(canonical.url, settings)
-    transcript = decide_transcript(info, canonical, settings, args)
+    transcript = decide_transcript(info, canonical, settings, args, view=view)
 
     frames = []
     frame_sources = {}
@@ -146,7 +185,7 @@ def process_part(canonical: Canonical, settings: Settings, args) -> None:
             vision_model = settings.lmstudio_vision_model
 
     bundle = build_bundle(
-        canonical, info, transcript, frames, settings, view=None, vision_model=vision_model
+        canonical, info, transcript, frames, settings, view=view, vision_model=vision_model
     )
     out = write_bundle(
         bundle, settings, frame_sources=frame_sources, frame_images=not args.no_frame_images
@@ -181,13 +220,23 @@ def _caption(canonical, frames, frame_sources, settings):
     return captioned
 
 
-def main(argv=None) -> int:
+def _run_probe(args) -> int:
+    """`probe` verb: cheap pre-flight metadata, JSON on stdout only. Diagnostics/errors go to
+    stderr so a caller can safely parse stdout as JSON. `probe` takes only a url (no levers),
+    so `apply_overrides` doesn't apply here."""
+    settings = Settings.load()
+    canonical = resolve(args.url)
     try:
-        sys.stdout.reconfigure(encoding="utf-8")  # CJK titles on Windows consoles
-    except Exception:
-        pass
+        result = probe(canonical, settings)
+    except (ViewError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
 
-    args = parse_args(argv)
+    print(json.dumps(result.model_dump()))
+    return 0
+
+
+def _run_ingest(args) -> int:
     settings = Settings.load()
     for w in apply_overrides(settings, args):
         print(f"[warn] {w}")
@@ -195,10 +244,20 @@ def main(argv=None) -> int:
     canonical = resolve(args.url)
 
     # Enumerate parts once (cheap, no media), then run the single-part pipeline per selected
-    # part with failure isolation (D12). Bilibili returns the whole set as a playlist for the
-    # bare URL, so we always re-extract each part via its ?p=N URL inside process_part.
-    info = extract_info(canonical.url, settings)
-    total = count_parts(info)
+    # part with failure isolation (D12). `view.pages` is the single source of truth for part
+    # count on bilibili.com; bilibili.tv has no player-API view endpoint yet (deferred), so it
+    # falls back to the yt-dlp playlist-entry count.
+    if canonical.platform == "bilibili.com":
+        try:
+            view = fetch_view(canonical, settings)
+            total = max(len(view.pages), 1)
+        except ViewError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+    else:
+        info = extract_info(canonical.url, settings)
+        total = len(info.get("entries") or []) or 1
+
     parts = select_parts(args, canonical, total=total)
     if len(parts) > 1:
         print(f"[{canonical.id}] {total} parts; running {len(parts)} -> {parts}")
@@ -213,6 +272,18 @@ def main(argv=None) -> int:
             status = "ok" if r.ok else f"FAILED ({r.error})"
             print(f"[{canonical.id} p{r.part}] {status}")
     return 1 if failed else 0
+
+
+def main(argv=None) -> int:
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")  # CJK titles on Windows consoles
+    except Exception:
+        pass
+
+    args = parse_args(argv)
+    if args.command == "probe":
+        return _run_probe(args)
+    return _run_ingest(args)
 
 
 if __name__ == "__main__":

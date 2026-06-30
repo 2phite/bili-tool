@@ -263,3 +263,27 @@ def test_part_segments_fetches_view_exactly_once():
     view_hits = [u for u in opener.requested_urls if u == _view_url(canonical)]
     assert len(view_hits) == 1
 
+
+def test_part_segments_accepts_prefetched_view_and_skips_fetch_view():
+    """Task 4: when `view` is supplied, part_segments must NOT hit the view endpoint at all."""
+    from bili_tool.player_api import _API_PLAYER, ViewData, ViewPage, part_segments
+
+    canonical = _canonical(part=2)
+    view = ViewData(
+        aid=42,
+        cid=100,
+        pages=[
+            ViewPage(part=1, cid=100, duration=300),
+            ViewPage(part=2, cid=200, duration=300),
+        ],
+    )
+    player_url = _API_PLAYER.format(aid=42, cid=200, bvid="BV1")
+    player_payload = {"code": 0, "data": {"subtitle": {"subtitles": []}}}
+    opener = _FakeOpener({player_url: player_payload})
+
+    result = part_segments(canonical, Settings(), opener=opener, view=view)
+
+    assert result is None  # no zh subtitle present
+    assert _view_url(canonical) not in opener.requested_urls
+    assert opener.requested_urls == [player_url]
+

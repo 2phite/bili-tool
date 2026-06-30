@@ -21,14 +21,6 @@ def part_url(base_url: str, part: int) -> str:
     return urlunparse(parsed._replace(query=urlencode({"p": part})))
 
 
-def count_parts(info: dict) -> int:
-    """Number of parts in a yt-dlp info dict: playlist entry count, else 1."""
-    entries = info.get("entries")
-    if entries is None:
-        return 1
-    return len(list(entries))
-
-
 def select_parts(args, canonical: Canonical, *, total: int) -> list[int]:
     """Which 1-based parts to run: all of them, an explicit --part, or the URL's part."""
     if getattr(args, "all_parts", False):

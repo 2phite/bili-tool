@@ -143,19 +143,21 @@ def fetch_view(canonical: Canonical, settings: Settings, *, opener=None) -> View
 
 
 def part_segments(
-    canonical: Canonical, settings: Settings, *, opener=None
+    canonical: Canonical, settings: Settings, *, opener=None, view: ViewData | None = None
 ) -> tuple[str, list[Segment]] | None:
     """Fetch + parse the original-zh subtitle for this part via the player API.
 
     Returns (lang, segments) or None when no usable zh track exists. `opener` is injectable for
-    tests; production builds one carrying the live cookies.
+    tests; production builds one carrying the live cookies. `view` lets a caller that already
+    fetched `ViewData` (Task 4: one fetch per part) share it instead of triggering a second GET.
     """
     op = opener or _opener(settings)
 
-    try:
-        view = fetch_view(canonical, settings, opener=op)
-    except ViewError:
-        return None
+    if view is None:
+        try:
+            view = fetch_view(canonical, settings, opener=op)
+        except ViewError:
+            return None
     aid = view.aid
     cid = cid_for_part(view, canonical.part)
     if not (aid and cid):

@@ -175,17 +175,19 @@ def _segments_from_track(formats: list, settings: Settings) -> list[Segment]:
 
 
 def _acquire(
-    info: dict, canonical: Canonical, settings: Settings, _fetch
+    info: dict, canonical: Canonical, settings: Settings, _fetch, *, view=None
 ) -> tuple[str, str, list[Segment]] | None:
     """Get (source, lang, segments) for the best original-zh track. yt-dlp's list first; if it's
-    empty (always, for bilibili AI subs — see player_api), fall back to the direct player API."""
+    empty (always, for bilibili AI subs — see player_api), fall back to the direct player API.
+    `view` (Task 4: one fetch per part) is passed through to the player-API fallback so it
+    doesn't re-fetch `ViewData` when the caller already has it."""
     pick = _pick_track(info)
     if pick is not None:
         source, lang, formats = pick
         return source, lang, _fetch(formats, settings)
     from .player_api import part_segments  # deferred: avoids an import cycle
 
-    got = part_segments(canonical, settings)
+    got = part_segments(canonical, settings, view=view)
     if got is None:
         return None
     lang, segments = got
@@ -193,12 +195,12 @@ def _acquire(
 
 
 def fetch_subtitle_segments(
-    info: dict, canonical: Canonical, settings: Settings
+    info: dict, canonical: Canonical, settings: Settings, *, view=None
 ) -> list[Segment] | None:
     """Best original-zh segments for an already-extracted part (no media), via yt-dlp then the
     player-API fallback. Used to pull *part 1's* subtitle for the D4 tier-2 identity check.
     Returns None when no usable zh track exists — i.e. nothing to compare against."""
-    acq = _acquire(info, canonical, settings, _segments_from_track)
+    acq = _acquire(info, canonical, settings, _segments_from_track, view=view)
     if acq is None:
         return None
     return acq[2] or None
@@ -210,12 +212,15 @@ def probe(
     settings: Settings,
     *,
     part1_segments: list[Segment] | None = None,
+    view=None,
     _fetch=_segments_from_track,
 ) -> SubtitleResult:
     """Probe + D4 two-tier assertion. Tier-1: duration sanity (all parts). Tier-2: for part>1,
     reject if the text is identical to part 1 (the #6357 signature) — caller supplies
-    `part1_segments`. single-part / part=1 can't hit #6357, so tier-2 is skipped there."""
-    acq = _acquire(info, canonical, settings, _fetch)
+    `part1_segments`. single-part / part=1 can't hit #6357, so tier-2 is skipped there.
+    `view` (Task 4) is forwarded to the player-API fallback so it reuses an already-fetched
+    `ViewData` instead of fetching it again."""
+    acq = _acquire(info, canonical, settings, _fetch, view=view)
     if acq is None:
         return SubtitleResult(False, None, None, reason="no original-language subtitle available")
 

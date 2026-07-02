@@ -30,7 +30,7 @@ from .transcribe import WHISPER_MODEL, download_audio, transcribe
 
 
 def parse_args(argv=None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(prog="bili-tool", description=__doc__)
+    p = argparse.ArgumentParser(prog="harvest", description=__doc__)
     sub = p.add_subparsers(dest="command", required=True)
 
     ingest = sub.add_parser("ingest", help="run the full ingest pipeline for a video/part")

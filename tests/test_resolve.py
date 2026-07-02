@@ -1,4 +1,4 @@
-from bili_tool.resolve import Canonical, resolve
+from harvest.resolve import Canonical, resolve
 
 
 def test_com_bv_default_part_is_1():

@@ -1,10 +1,10 @@
 import pytest
 
-from bili_tool.config import Settings
-from bili_tool.player_api import ViewError
-from bili_tool.probe import probe
-from bili_tool.resolve import Canonical
-from bili_tool.schema import ProbeResult
+from harvest.config import Settings
+from harvest.player_api import ViewError
+from harvest.probe import probe
+from harvest.resolve import Canonical
+from harvest.schema import ProbeResult
 from tests.test_player_api import _FakeOpener, _view_url
 
 

@@ -1,7 +1,7 @@
 """Public pre-flight: cheap metadata probe ahead of the full pipeline.
 
 Atlas calls `probe()` to estimate workload (title/duration/parts/per-part durations) before
-committing to the full bili-tool run. Maps `fetch_view`'s `ViewData` onto the stable
+committing to the full harvest run. Maps `fetch_view`'s `ViewData` onto the stable
 `ProbeResult` schema (SPEC: downstream-facing contract, schema.py).
 
 bilibili.tv is deferred (no player-API view endpoint wired yet) - guarded out before any HTTP.

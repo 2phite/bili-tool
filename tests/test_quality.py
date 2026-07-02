@@ -1,6 +1,6 @@
-from bili_tool.config import QualityThresholds
-from bili_tool.quality import evaluate
-from bili_tool.schema import Segment
+from harvest.config import QualityThresholds
+from harvest.quality import evaluate
+from harvest.schema import Segment
 
 
 def _segs(texts, step=4.0):

@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from bili_tool.cli import apply_overrides, main, parse_args
-from bili_tool.config import Settings
+from harvest.cli import apply_overrides, main, parse_args
+from harvest.config import Settings
 
 
 def _settings():
@@ -96,9 +96,9 @@ def test_no_args_at_all_is_a_system_exit():
 
 
 def test_probe_path_prints_only_json_to_stdout(monkeypatch, capsys):
-    from bili_tool import cli
-    from bili_tool.resolve import Canonical
-    from bili_tool.schema import ProbeResult
+    from harvest import cli
+    from harvest.resolve import Canonical
+    from harvest.schema import ProbeResult
 
     monkeypatch.setattr(
         cli, "resolve", lambda url: Canonical("bilibili.com", "BV1", 1, url)
@@ -150,9 +150,9 @@ def test_ingest_malformed_url_exits_nonzero_with_error_on_stderr(capsys):
 
 def test_ingest_enumerates_parts_from_view_pages(monkeypatch):
     """--all-parts on a .com URL must derive its part count from `view.pages`, not yt-dlp."""
-    from bili_tool import cli
-    from bili_tool.player_api import ViewData, ViewPage
-    from bili_tool.resolve import Canonical
+    from harvest import cli
+    from harvest.player_api import ViewData, ViewPage
+    from harvest.resolve import Canonical
 
     monkeypatch.setattr(
         cli, "resolve", lambda url: Canonical("bilibili.com", "BV1", 1, url)
@@ -180,10 +180,10 @@ def test_ingest_enumerates_parts_from_view_pages(monkeypatch):
 def test_process_part_fetches_view_once_and_reuses_it_for_subtitle_path(monkeypatch):
     """One view fetch per part: process_part must fetch view once and pass it through to both
     build_bundle and the subtitle-cid path (decide_transcript), never re-fetching."""
-    from bili_tool import cli
-    from bili_tool.player_api import ViewData, ViewPage
-    from bili_tool.resolve import Canonical
-    from bili_tool.schema import Transcript
+    from harvest import cli
+    from harvest.player_api import ViewData, ViewPage
+    from harvest.resolve import Canonical
+    from harvest.schema import Transcript
 
     canonical = Canonical("bilibili.com", "BV1", 1, "https://b/video/BV1")
     view = ViewData(aid=1, cid=100, pages=[ViewPage(part=1, cid=100)])
@@ -209,7 +209,7 @@ def test_process_part_fetches_view_once_and_reuses_it_for_subtitle_path(monkeypa
 
     def fake_build_bundle(canonical, info, transcript, frames, settings, *, view=None, vision_model=None):
         build_bundle_views.append(view)
-        from bili_tool.schema import Bundle, Meta
+        from harvest.schema import Bundle, Meta
 
         return Bundle(
             platform="bilibili.com",

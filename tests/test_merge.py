@@ -1,10 +1,10 @@
 import json
 
-from bili_tool.config import Settings
-from bili_tool.merge import build_bundle, chunk, render_markdown, write_bundle
-from bili_tool.player_api import ViewData
-from bili_tool.resolve import Canonical
-from bili_tool.schema import Bundle, Frame, Meta, Segment, Transcript
+from harvest.config import Settings
+from harvest.merge import build_bundle, chunk, render_markdown, write_bundle
+from harvest.player_api import ViewData
+from harvest.resolve import Canonical
+from harvest.schema import Bundle, Frame, Meta, Segment, Transcript
 
 
 def _seg(start, end, text="x"):

@@ -1,6 +1,6 @@
-from bili_tool.resolve import Canonical
-from bili_tool.schema import Segment
-from bili_tool.subtitles import SubtitleResult, is_part1_duplicate, probe
+from harvest.resolve import Canonical
+from harvest.schema import Segment
+from harvest.subtitles import SubtitleResult, is_part1_duplicate, probe
 
 
 def _segs(texts):

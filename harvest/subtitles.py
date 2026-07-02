@@ -33,10 +33,21 @@ class SubtitleResult:
     last_cue_end: float | None = None
 
 
-def ydl_opts(settings: Settings, *, skip_download: bool = True, referer: str | None = REFERER) -> dict:
+def ydl_opts(
+    settings: Settings,
+    *,
+    skip_download: bool = True,
+    referer: str | None = REFERER,
+    browser_cookies: bool = True,
+) -> dict:
     """Common yt-dlp options: auth (D9), Referer (§7, scoped to bilibili by default — YouTube
     callers pass referer=None so bilibili's Referer is never sent on YouTube requests), ffmpeg
-    location."""
+    location.
+
+    `browser_cookies=False` omits the `cookiesfrombrowser` jar (issue #1): YouTube extraction
+    breaks ("Requested format is not available") when a logged-in browser session is attached,
+    so YouTube callers opt out unless the user opts in via HARVEST_YT_COOKIES. bilibili keeps
+    the jar (its default, cookies effectively required)."""
     headers: dict = {}
     if referer:
         headers["Referer"] = referer
@@ -65,7 +76,7 @@ def ydl_opts(settings: Settings, *, skip_download: bool = True, referer: str | N
         opts["http_chunk_size"] = 10 * 1024 * 1024
     if settings.sessdata:
         headers["Cookie"] = f"SESSDATA={settings.sessdata}"
-    else:
+    elif browser_cookies:
         profile = settings.cookies_profile or None
         opts["cookiesfrombrowser"] = (settings.cookies_browser, profile, None, None)
     if settings.ffmpeg_path:

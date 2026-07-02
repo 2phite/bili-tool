@@ -48,8 +48,11 @@ def download_video(canonical, settings: Settings) -> Path:
     if existing:
         return existing[0]
 
-    referer = REFERER if canonical.platform == "bilibili.com" else None
-    opts = ydl_opts(settings, skip_download=False, referer=referer)
+    is_bilibili = canonical.platform == "bilibili.com"
+    referer = REFERER if is_bilibili else None
+    # Cookie-free YouTube download (issue #1); bilibili keeps its jar. Opt in via HARVEST_YT_COOKIES.
+    browser_cookies = is_bilibili or settings.youtube_cookies
+    opts = ydl_opts(settings, skip_download=False, referer=referer, browser_cookies=browser_cookies)
     opts.update(
         {
             # Video-only (no audio): frames don't need sound, and skipping the mux avoids the

@@ -37,6 +37,21 @@ def test_auth_opts_has_no_referer_header():
     assert "Referer" not in opts["http_headers"]
 
 
+def test_auth_opts_omits_browser_cookies_by_default():
+    # Issue #1: YouTube is cookie-free by default — a logged-in browser session breaks yt-dlp's
+    # default format selection ("Requested format is not available"). Public videos must extract.
+    p = YouTubeProvider()
+    opts = p.auth_opts(Settings())
+    assert "cookiesfrombrowser" not in opts
+
+
+def test_auth_opts_attaches_browser_cookies_when_opted_in():
+    # Gated content is still reachable via the explicit opt-in (HARVEST_YT_COOKIES).
+    p = YouTubeProvider()
+    opts = p.auth_opts(Settings(youtube_cookies=True))
+    assert "cookiesfrombrowser" in opts
+
+
 def test_metadata_from_info_maps_fields_and_utc_published_at():
     p = YouTubeProvider()
     meta = p._metadata_from_info(_info("dQw4w9WgXcQ"))

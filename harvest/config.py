@@ -73,6 +73,9 @@ class Settings:
     sessdata: str | None = None
     cookies_browser: str = "firefox"
     cookies_profile: str = ""
+    # YouTube is cookie-free by default (issue #1: a logged-in browser session breaks yt-dlp's
+    # default format selection). Opt in with HARVEST_YT_COOKIES to unlock gated YouTube content.
+    youtube_cookies: bool = False
 
     # paths
     cache_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "cache")
@@ -106,6 +109,8 @@ class Settings:
             sessdata=os.environ.get("SESSDATA") or None,
             cookies_browser=os.environ.get("HARVEST_COOKIES_BROWSER", cls.cookies_browser),
             cookies_profile=os.environ.get("HARVEST_COOKIES_PROFILE", ""),
+            youtube_cookies=os.environ.get("HARVEST_YT_COOKIES", "").strip().lower()
+            in ("1", "true", "yes", "on"),
         )
         if os.environ.get("HARVEST_CACHE_DIR"):
             s.cache_dir = Path(os.environ["HARVEST_CACHE_DIR"])

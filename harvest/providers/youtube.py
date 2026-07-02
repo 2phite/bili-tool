@@ -46,10 +46,14 @@ class YouTubeProvider:
             raise ValueError(f"unrecognized YouTube video id in URL: {url}")
         return Canonical("youtube.com", vid, 1, f"https://www.youtube.com/watch?v={vid}")
 
-    def auth_opts(self, settings: Settings) -> dict:
-        # YouTube cookies are optional; a configured browser profile unlocks gated content.
+    def _ydl_opts(self, settings: Settings, **kw) -> dict:
         # referer=None: the default Referer is a bilibili URL and must never reach YouTube.
-        return ydl_opts(settings, referer=None)
+        # browser_cookies opt-in (issue #1): a logged-in Firefox session breaks yt-dlp's default
+        # format selection, so YouTube is cookie-free unless HARVEST_YT_COOKIES is set.
+        return ydl_opts(settings, referer=None, browser_cookies=settings.youtube_cookies, **kw)
+
+    def auth_opts(self, settings: Settings) -> dict:
+        return self._ydl_opts(settings)
 
     def _published_at(self, info: dict) -> str | None:
         ts = info.get("timestamp")
@@ -81,7 +85,7 @@ class YouTubeProvider:
         )
 
     def _extract_info(self, canonical: Canonical, settings: Settings) -> dict:
-        with yt_dlp.YoutubeDL(ydl_opts(settings, referer=None)) as ydl:
+        with yt_dlp.YoutubeDL(self._ydl_opts(settings)) as ydl:
             return ydl.extract_info(canonical.url, download=False)
 
     def fetch_metadata(self, canonical, settings, *, info=None) -> SourceMetadata:
@@ -97,7 +101,7 @@ class YouTubeProvider:
         return info.get("language") or None
 
     def _fetch_url(self, url: str, settings: Settings) -> str:
-        with yt_dlp.YoutubeDL(ydl_opts(settings, referer=None)) as ydl:
+        with yt_dlp.YoutubeDL(self._ydl_opts(settings)) as ydl:
             return ydl.urlopen(url).read().decode("utf-8", "replace")
 
     def fetch_subtitle(

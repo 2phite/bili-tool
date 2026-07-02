@@ -18,6 +18,19 @@ def test_ydl_opts_referer_none_omits_referer_header():
     assert "Referer" not in opts["http_headers"]
 
 
+def test_ydl_opts_default_attaches_browser_cookie_jar():
+    # Default (no SESSDATA): bilibili's cookie jar fallback is still attached.
+    opts = ydl_opts(Settings())
+    assert "cookiesfrombrowser" in opts
+
+
+def test_ydl_opts_browser_cookies_false_omits_cookie_jar():
+    # Regression (issue #1): a caller (YouTube) must be able to produce opts with NO browser
+    # cookie jar, so yt-dlp's default format selection isn't broken by a logged-in session.
+    opts = ydl_opts(Settings(), browser_cookies=False)
+    assert "cookiesfrombrowser" not in opts
+
+
 def test_is_part1_duplicate_identical_text():
     a = _segs(["第一句。", "第二句。", "第三句。"])
     b = _segs(["第一句。", "第二句。", "第三句。"])

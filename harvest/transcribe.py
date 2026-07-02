@@ -30,8 +30,12 @@ def download_audio(canonical: Canonical, settings: Settings) -> Path:
     if existing:
         return existing[0]
 
-    referer = REFERER if canonical.platform == "bilibili.com" else None
-    opts = ydl_opts(settings, skip_download=False, referer=referer)
+    is_bilibili = canonical.platform == "bilibili.com"
+    referer = REFERER if is_bilibili else None
+    # YouTube media download hits the same cookie trap as extraction (issue #1): a logged-in
+    # browser session breaks yt-dlp's format selection. Cookie-free unless opted in.
+    browser_cookies = is_bilibili or settings.youtube_cookies
+    opts = ydl_opts(settings, skip_download=False, referer=referer, browser_cookies=browser_cookies)
     opts.update({"format": "bestaudio/best", "outtmpl": str(audio_dir / f"{key}.%(ext)s")})
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(canonical.url, download=True)

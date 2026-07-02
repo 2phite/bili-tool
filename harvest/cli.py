@@ -13,7 +13,8 @@ import sys
 
 from .cache import fs_key, load_json, save_json
 from .config import Settings
-from .merge import build_bundle, write_bundle
+from .danmaku import represent_danmaku
+from .merge import build_bundle, chunk_boundaries, write_bundle
 from .parts import run_parts, select_parts
 from .player_api import ViewError
 from .probe import probe
@@ -60,6 +61,10 @@ def parse_args(argv=None) -> argparse.Namespace:
     ingest.add_argument(
         "--lang", default=None,
         help="pin transcription language (default: zh for bilibili, auto-detect for YouTube)",
+    )
+    ingest.add_argument(
+        "--danmaku", action="store_true",
+        help="opt-in: fetch + mirror the bilibili danmaku (audience comment) track (bilibili only)",
     )
 
     probe_cmd = sub.add_parser("probe", help="cheap pre-flight metadata probe, no media")
@@ -158,7 +163,29 @@ def process_part(canonical: Canonical, settings: Settings, args) -> None:
             frames = _caption(canonical, frames, frame_sources, settings)
             vision_model = settings.lmstudio_vision_model
 
-    bundle = build_bundle(canonical, meta, transcript, frames, settings, vision_model=vision_model)
+    danmaku = None
+    if args.danmaku:
+        if not hasattr(provider, "fetch_danmaku"):
+            print(f"[{canonical.id} p{canonical.part}] --danmaku ignored: "
+                  f"not supported on {canonical.platform}")
+        elif not settings.lmstudio_danmaku_model:
+            print(f"[{canonical.id} p{canonical.part}] --danmaku ignored: "
+                  f"HARVEST_DANMAKU_MODEL not set")
+        else:
+            fetch = provider.fetch_danmaku(canonical, settings)
+            boundaries = chunk_boundaries(
+                transcript.segments, frames,
+                window_s=settings.chunk_window_s, duration_s=meta.duration_s,
+            )
+            danmaku = represent_danmaku(
+                canonical, fetch, settings, boundaries=boundaries,
+                duration_s=meta.duration_s, window_s=settings.chunk_window_s,
+            )
+
+    bundle = build_bundle(
+        canonical, meta, transcript, frames, settings,
+        vision_model=vision_model, danmaku=danmaku,
+    )
     out = write_bundle(
         bundle, settings, frame_sources=frame_sources, frame_images=not args.no_frame_images
     )

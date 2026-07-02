@@ -26,7 +26,12 @@ class Canonical:
 @dataclass
 class SourceMetadata:
     """Normalized per-video metadata every provider produces. Replaces ViewData-vs-info
-    branching: merge/probe read only this shape."""
+    branching: merge/probe read only this shape.
+
+    `thumbnail_url` + the stat fields (Task 1) are additive and optional: bilibili fills all of
+    them from the already-fetched view API response; YouTube fills only `view_count`/`like_count`/
+    `thumbnail_url` and leaves the bilibili-only stats (`coin_count`, `favorite_count`,
+    `share_count`, `reply_count`, `danmaku_count`) null."""
 
     platform: Platform
     id: str
@@ -38,6 +43,14 @@ class SourceMetadata:
     published_at: str | None            # ISO 8601, per-source tz (SPEC §8)
     parts: int
     part_durations_s: list[int | None]
+    thumbnail_url: str | None = None
+    view_count: int | None = None
+    like_count: int | None = None
+    coin_count: int | None = None       # bilibili-only
+    favorite_count: int | None = None   # bilibili-only
+    share_count: int | None = None      # bilibili-only
+    reply_count: int | None = None      # bilibili-only
+    danmaku_count: int | None = None    # bilibili-only
 
 
 @dataclass

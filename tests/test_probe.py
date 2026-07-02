@@ -25,6 +25,11 @@ def test_probe_maps_full_fixture_to_probe_result():
             "duration": 600,
             "pubdate": 1719561600,
             "owner": {"mid": 7, "name": "Uploader"},
+            "pic": "http://i0.hdslb.com/bfs/archive/thumb.jpg",
+            "stat": {
+                "view": 1000, "danmaku": 50, "like": 200, "coin": 30,
+                "favorite": 40, "share": 10, "reply": 20,
+            },
             "pages": [
                 {"page": 1, "cid": 100, "part": "Part One", "duration": 300},
                 {"page": 2, "cid": 200, "part": "Part Two", "duration": 300},
@@ -46,6 +51,15 @@ def test_probe_maps_full_fixture_to_probe_result():
     assert result.published_at == "2024-06-28T16:00:00+08:00"
     assert result.parts == 2
     assert result.part_durations_s == [300, 300]
+    assert result.thumbnail_url == "http://i0.hdslb.com/bfs/archive/thumb.jpg"
+    assert result.fetched_at is not None and result.fetched_at.endswith("Z")
+    assert result.stats.view_count == 1000
+    assert result.stats.danmaku_count == 50
+    assert result.stats.like_count == 200
+    assert result.stats.coin_count == 30
+    assert result.stats.favorite_count == 40
+    assert result.stats.share_count == 10
+    assert result.stats.reply_count == 20
 
 
 def test_probe_published_at_none_when_pubdate_missing():
@@ -143,7 +157,9 @@ def test_probe_youtube_delegates_to_provider(monkeypatch):
             return SourceMetadata(
                 platform="youtube.com", id="dQw4w9WgXcQ", title="T", uploader="C",
                 uploader_id="UCx", description="d", duration_s=100,
-                published_at="2009-10-25T06:57:33Z", parts=1, part_durations_s=[100])
+                published_at="2009-10-25T06:57:33Z", parts=1, part_durations_s=[100],
+                thumbnail_url="https://i.ytimg.com/vi/dQw4w9WgXcQ/hq.jpg",
+                view_count=123, like_count=45)
 
     monkeypatch.setattr(probe_mod, "select_provider", lambda url: _FakeYT())
     result = probe_mod.probe(canonical, Settings())
@@ -151,3 +167,8 @@ def test_probe_youtube_delegates_to_provider(monkeypatch):
     assert result.platform == "youtube.com"
     assert result.uploader_id == "UCx"
     assert result.published_at.endswith("Z")
+    assert result.thumbnail_url == "https://i.ytimg.com/vi/dQw4w9WgXcQ/hq.jpg"
+    assert result.stats.view_count == 123
+    assert result.stats.like_count == 45
+    assert result.stats.coin_count is None
+    assert result.fetched_at.endswith("Z")

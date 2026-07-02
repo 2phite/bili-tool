@@ -67,6 +67,21 @@ class Meta(BaseModel):
     tool_version: str
 
 
+class Stats(BaseModel):
+    """Engagement metrics — a POINT-IN-TIME SNAPSHOT as of the enclosing record's `fetched_at`,
+    NOT stable identity. All fields volatile (generally grow, but can be reset/hidden) and
+    per-platform partial: bilibili fills all; YouTube fills view_count/like_count only.
+    Null-tolerate every field; never compare across bundles without accounting for each
+    record's `fetched_at`."""
+    view_count:     int | None = None
+    like_count:     int | None = None
+    coin_count:     int | None = None   # bilibili 硬币; YouTube null
+    favorite_count: int | None = None   # bilibili 收藏; YouTube null
+    share_count:    int | None = None   # bilibili 分享; YouTube null
+    reply_count:    int | None = None   # top-level comments (bilibili stat.reply); YT null
+    danmaku_count:  int | None = None   # bilibili danmaku total (--danmaku opt-in signal); YT null
+
+
 class ProbeResult(BaseModel):
     """Cheap pre-flight metadata (no transcript/frames): lets Atlas estimate workload before
     committing to the full pipeline."""
@@ -80,8 +95,46 @@ class ProbeResult(BaseModel):
     description: str | None = None
     duration_s: int | None = None
     published_at: str | None = None  # ISO 8601, video's publish time (SPEC: bilibili pubdate)
+    thumbnail_url: str | None = None  # intrinsic/descriptive, NOT part of `stats`
+    fetched_at: str | None = None  # ISO 8601 UTC, e.g. "2026-06-28T12:00:00Z" -- when probe ran
+    stats: Stats | None = None
     parts: int
     part_durations_s: list[int | None] = Field(default_factory=list)
+
+
+class DanmakuLine(BaseModel):
+    """A representative danmaku = one cluster head. `text` is VERBATIM (never paraphrased/translated/
+    decoded). `count` = near-identical variants collapsed into this representative within the window
+    (1 = singleton). Lines within a window are ordered CHRONOLOGICALLY by content time, never by
+    count."""
+
+    text: str
+    count: int = 1
+
+
+class DanmakuWindow(BaseModel):
+    """Danmaku pinned to content-time window [start, end) seconds (aligned to bundle chunks).
+    `total` = raw danmaku in the window BEFORE clustering — the density signal that survives even if
+    `lines` is capped in bundle.md."""
+
+    start: float
+    end: float
+    total: int
+    lines: list[DanmakuLine] = Field(default_factory=list)
+
+
+class Danmaku(BaseModel):
+    """Crowd danmaku track — a faithful MIRROR of the audience stream, NOT interpreted content.
+    LOWER AUTHORITY than `transcript`: crowd expression (jokes, memes, sarcasm, frequently 'wrong'
+    claims); never treat as authoritative. bilibili-only; present only when `--danmaku` was requested
+    on a supporting platform (else Bundle.danmaku is null). bundle.json is the COMPLETE record;
+    bundle.md may cap per window with a '+N more' marker (read this JSON for the full set)."""
+
+    source_total: int | None = None  # platform-reported total (stat.danmaku)
+    fetched_total: int  # how many actually pulled (endpoint may sample)
+    sampled: bool  # fetched_total < source_total -> a sample, not a census
+    model: str | None = None  # the LLM that produced this representation (provenance)
+    windows: list[DanmakuWindow] = Field(default_factory=list)
 
 
 class Bundle(BaseModel):
@@ -96,7 +149,10 @@ class Bundle(BaseModel):
     description: str | None = None
     duration_s: int | None = None
     published_at: str | None = None  # ISO 8601, video's publish time (SPEC: bilibili pubdate)
+    thumbnail_url: str | None = None  # intrinsic/descriptive, NOT part of `stats`
     fetched_at: str  # ISO 8601 UTC, e.g. "2026-06-28T12:00:00Z"
+    stats: Stats | None = None
     transcript: Transcript
     frames: list[Frame] = Field(default_factory=list)
+    danmaku: Danmaku | None = None
     meta: Meta

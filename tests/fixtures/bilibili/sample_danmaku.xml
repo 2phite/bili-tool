@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<i>
+<chatserver>chat.bilibili.com</chatserver>
+<chatid>100</chatid>
+<mission>0</mission>
+<maxlimit>8000</maxlimit>
+<state>0</state>
+<real_name>0</real_name>
+<source>k-v</source>
+<d p="12.5,1,25,16777215,1719561600,0,abc123,1001">你好世界</d>
+<d p="3.2,1,25,16777215,1719561601,0,abc124,1002">弹幕测试</d>
+<d p="3.2,1,25,16777215,1719561602,0,abc125,1003">弹幕测试</d>
+<d p="8.0,4,25,16777215,1719561603,0,abc126,1004">重复弹幕</d>
+<d p="8.0,4,25,16777215,1719561604,0,abc127,1005">重复弹幕近似</d>
+<d p="1,2">too few fields, malformed</d>
+</i>

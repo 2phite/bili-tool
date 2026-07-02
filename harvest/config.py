@@ -66,6 +66,8 @@ class Settings:
     lmstudio_base_url: str = "http://localhost:1234/v1"
     lmstudio_api_key: str = ""
     lmstudio_vision_model: str = ""
+    lmstudio_danmaku_model: str = ""
+    lmstudio_danmaku_max_tokens: int = 8192
 
     # auth (D9)
     sessdata: str | None = None
@@ -97,6 +99,10 @@ class Settings:
             lmstudio_base_url=os.environ.get("LMSTUDIO_BASE_URL", cls.lmstudio_base_url),
             lmstudio_api_key=os.environ.get("LMSTUDIO_API_KEY", ""),
             lmstudio_vision_model=os.environ.get("LMSTUDIO_VISION_MODEL", ""),
+            lmstudio_danmaku_model=os.environ.get("HARVEST_DANMAKU_MODEL", ""),
+            lmstudio_danmaku_max_tokens=int(
+                os.environ.get("HARVEST_DANMAKU_MAX_TOKENS", cls.lmstudio_danmaku_max_tokens)
+            ),
             sessdata=os.environ.get("SESSDATA") or None,
             cookies_browser=os.environ.get("HARVEST_COOKIES_BROWSER", cls.cookies_browser),
             cookies_profile=os.environ.get("HARVEST_COOKIES_PROFILE", ""),

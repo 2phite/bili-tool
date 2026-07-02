@@ -14,7 +14,11 @@ from pathlib import Path
 
 from .config import Settings
 from .providers.base import Canonical, SourceMetadata
-from .schema import Bundle, Frame, Meta, Segment, Transcript
+from .schema import Bundle, Danmaku, Frame, Meta, Segment, Stats, Transcript
+
+# Pathological-size cap for danmaku lines rendered per window in bundle.md ONLY; bundle.json
+# always carries the complete, uncapped `Danmaku` via `model_dump_json`.
+DANMAKU_MD_CAP = 50
 
 
 def iso_now() -> str:
@@ -33,6 +37,22 @@ class Chunk:
     segments: list[Segment]
 
 
+def chunk_boundaries(
+    segments: list[Segment],
+    frames: list[Frame],
+    *,
+    window_s: float,
+    duration_s: float | None,
+) -> list[float]:
+    """D3 boundary computation, extracted so other stages (danmaku windowing, Task 4) can align
+    to the SAME boundaries `chunk()` buckets against: deduped frame timestamps when frames exist,
+    else a fixed wall-clock window covering `duration_s`."""
+    if frames:
+        return sorted({0.0, *(f.ts for f in frames)})
+    end = duration_s or (max((s.end for s in segments), default=0.0))
+    return [i * window_s for i in range(int(end // window_s) + 1)] or [0.0]
+
+
 def chunk(
     segments: list[Segment],
     frames: list[Frame],
@@ -42,11 +62,7 @@ def chunk(
 ) -> list[Chunk]:
     """D3: boundaries = deduped frame timestamps when present, else a fixed wall-clock window.
     Segments are assigned whole by their start timestamp; never split across a boundary."""
-    if frames:
-        boundaries = sorted({0.0, *(f.ts for f in frames)})
-    else:
-        end = duration_s or (max((s.end for s in segments), default=0.0))
-        boundaries = [i * window_s for i in range(int(end // window_s) + 1)] or [0.0]
+    boundaries = chunk_boundaries(segments, frames, window_s=window_s, duration_s=duration_s)
 
     chunks = [Chunk(start=b, frames=[], segments=[]) for b in boundaries]
     for f in frames:
@@ -64,12 +80,19 @@ def build_bundle(
     settings: Settings,
     *,
     vision_model: str | None = None,
+    danmaku: Danmaku | None = None,
 ) -> Bundle:
     return Bundle(
         platform=canonical.platform, id=canonical.id, part=canonical.part, url=canonical.url,
         title=meta.title, uploader=meta.uploader, uploader_id=meta.uploader_id,
         description=meta.description, duration_s=meta.duration_s, published_at=meta.published_at,
-        fetched_at=iso_now(), transcript=transcript, frames=frames,
+        thumbnail_url=meta.thumbnail_url,
+        stats=Stats(
+            view_count=meta.view_count, like_count=meta.like_count, coin_count=meta.coin_count,
+            favorite_count=meta.favorite_count, share_count=meta.share_count,
+            reply_count=meta.reply_count, danmaku_count=meta.danmaku_count,
+        ),
+        fetched_at=iso_now(), transcript=transcript, frames=frames, danmaku=danmaku,
         meta=Meta(
             cookies_used=bool(settings.sessdata or settings.cookies_browser),
             referer_used=(canonical.platform == "bilibili.com"),
@@ -90,6 +113,7 @@ def render_markdown(bundle: Bundle, settings: Settings) -> str:
         f"title: {bundle.title or ''}",
         f"uploader: {bundle.uploader or ''}",
         f"uploader_id: {bundle.uploader_id or ''}",
+        f"thumbnail_url: {bundle.thumbnail_url or ''}",
         f"duration: {dur}",
         f"published_at: {bundle.published_at or ''}",
         f"fetched_at: {bundle.fetched_at}",
@@ -127,6 +151,32 @@ def render_markdown(bundle: Bundle, settings: Settings) -> str:
         if text:
             lines.append(text)
         lines.append("")
+
+    dm = bundle.danmaku
+    if dm and dm.windows:
+        lines.append("## Danmaku")
+        note = f"_crowd track (lower authority than transcript) — fetched {dm.fetched_total}"
+        if dm.source_total is not None:
+            note += f" of {dm.source_total}"
+        if dm.sampled:
+            note += " (sampled)"
+        if dm.model:
+            note += f" · {dm.model}"
+        note += "_"
+        lines.append(note)
+        lines.append("")
+        for w in dm.windows:
+            if not w.lines:
+                continue
+            lines.append(f"### [{_mmss(w.start)}] ({w.total} danmaku)")
+            shown = w.lines[:DANMAKU_MD_CAP]
+            for ln in shown:
+                suffix = "" if ln.count == 1 else f" ×{ln.count}"
+                lines.append(f"- 「{ln.text}」{suffix}")
+            overflow = len(w.lines) - DANMAKU_MD_CAP
+            if overflow > 0:
+                lines.append(f"- ﹢{overflow} more — see bundle.json")
+            lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
 

@@ -5,8 +5,9 @@ platform branches (SPEC §4.1)."""
 from __future__ import annotations
 
 from .config import Settings
+from .merge import iso_now
 from .providers.base import Canonical, select_provider
-from .schema import ProbeResult
+from .schema import ProbeResult, Stats
 
 
 def probe(canonical: Canonical, settings: Settings, *, opener=None) -> ProbeResult:
@@ -27,6 +28,17 @@ def probe(canonical: Canonical, settings: Settings, *, opener=None) -> ProbeResu
         description=meta.description,
         duration_s=meta.duration_s,
         published_at=meta.published_at,
+        thumbnail_url=meta.thumbnail_url,
+        fetched_at=iso_now(),
+        stats=Stats(
+            view_count=meta.view_count,
+            like_count=meta.like_count,
+            coin_count=meta.coin_count,
+            favorite_count=meta.favorite_count,
+            share_count=meta.share_count,
+            reply_count=meta.reply_count,
+            danmaku_count=meta.danmaku_count,
+        ),
         parts=meta.parts,
         part_durations_s=meta.part_durations_s,
     )

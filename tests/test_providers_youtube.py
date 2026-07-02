@@ -48,6 +48,23 @@ def test_metadata_from_info_maps_fields_and_utc_published_at():
     assert meta.published_at == "2009-10-25T06:57:33Z"       # timestamp 1256453853 -> UTC ...Z
     assert meta.parts == 1
     assert meta.part_durations_s == [meta.duration_s]
+    assert meta.thumbnail_url == "https://i.ytimg.com/vi/dQw4w9WgXcQ/maxresdefault.jpg"
+    assert meta.view_count == 1700000000
+    assert meta.like_count == 18000000
+    # bilibili-only stats stay null on YouTube (do not invent values)
+    assert meta.coin_count is None
+    assert meta.favorite_count is None
+    assert meta.share_count is None
+    assert meta.reply_count is None
+    assert meta.danmaku_count is None
+
+
+def test_metadata_from_info_missing_stat_fields_are_none():
+    p = YouTubeProvider()
+    meta = p._metadata_from_info(_info("kJQP7kiw5Fk"))  # fixture has no view_count/like_count/thumbnail
+    assert meta.thumbnail_url is None
+    assert meta.view_count is None
+    assert meta.like_count is None
 
 
 def test_published_at_falls_back_to_upload_date_midnight_utc():

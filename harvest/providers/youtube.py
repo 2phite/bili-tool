@@ -75,6 +75,9 @@ class YouTubeProvider:
             published_at=self._published_at(info),
             parts=1,
             part_durations_s=[dur_i],
+            thumbnail_url=info.get("thumbnail"),
+            view_count=info.get("view_count"),
+            like_count=info.get("like_count"),
         )
 
     def _extract_info(self, canonical: Canonical, settings: Settings) -> dict:

@@ -35,6 +35,9 @@ def test_fetch_metadata_maps_view_to_source_metadata():
     payload = {"code": 0, "data": {
         "aid": 42, "cid": 100, "title": "My Video", "desc": "D", "duration": 600,
         "pubdate": 1719561600, "owner": {"mid": 7, "name": "Up"},
+        "pic": "http://i0.hdslb.com/bfs/archive/thumb.jpg",
+        "stat": {"view": 1000, "danmaku": 50, "like": 200, "coin": 30,
+                  "favorite": 40, "share": 10, "reply": 20},
         "pages": [{"page": 1, "cid": 100, "part": "P1", "duration": 300},
                   {"page": 2, "cid": 200, "part": "P2", "duration": 300}]}}
     opener = _FakeOpener({_view_url(canonical): payload})
@@ -46,6 +49,14 @@ def test_fetch_metadata_maps_view_to_source_metadata():
     assert meta.published_at == "2024-06-28T16:00:00+08:00"
     assert meta.parts == 2
     assert meta.part_durations_s == [300, 300]
+    assert meta.thumbnail_url == "http://i0.hdslb.com/bfs/archive/thumb.jpg"
+    assert meta.view_count == 1000
+    assert meta.danmaku_count == 50
+    assert meta.like_count == 200
+    assert meta.coin_count == 30
+    assert meta.favorite_count == 40
+    assert meta.share_count == 10
+    assert meta.reply_count == 20
 
 
 def test_fetch_metadata_uses_canonical_platform_for_bilibili_tv():
@@ -105,6 +116,31 @@ def test_fetch_subtitle_rejects_when_gate_fails_and_carries_gate(monkeypatch):
     out = p.fetch_subtitle(_canonical(), Settings(), None)
     assert out.accepted is False and out.source is None
     assert out.quality_gate is failed and "rejected" in out.source_reason
+
+
+def test_fetch_danmaku_delegates_to_player_api(monkeypatch):
+    """BilibiliProvider.fetch_danmaku is a thin delegation to player_api.fetch_danmaku."""
+    from harvest.player_api import DanmakuFetch
+    from harvest.providers import bilibili as biliprov
+
+    p = BilibiliProvider()
+    canonical = _canonical()
+    sentinel = DanmakuFetch(source_total=5, fetched_total=5, sampled=False, records=[])
+    captured = {}
+
+    def _fake_fetch_danmaku(c, s, *, opener=None, view=None):
+        captured["canonical"] = c
+        captured["opener"] = opener
+        captured["view"] = view
+        return sentinel
+
+    monkeypatch.setattr(biliprov, "fetch_danmaku", _fake_fetch_danmaku)
+    result = p.fetch_danmaku(canonical, Settings(), opener="fake-opener", view="fake-view")
+
+    assert result is sentinel
+    assert captured["canonical"] is canonical
+    assert captured["opener"] == "fake-opener"
+    assert captured["view"] == "fake-view"
 
 
 def test_fetch_subtitle_rejected_when_probe_not_found_no_gate(monkeypatch):

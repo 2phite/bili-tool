@@ -5,6 +5,9 @@
 cache/
 out/
 
+# throwaway probes (danmaku dumper, dumps)
+scratch/
+
 # python
 __pycache__/
 *.py[cod]

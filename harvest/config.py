@@ -98,13 +98,13 @@ class Settings:
             lmstudio_api_key=os.environ.get("LMSTUDIO_API_KEY", ""),
             lmstudio_vision_model=os.environ.get("LMSTUDIO_VISION_MODEL", ""),
             sessdata=os.environ.get("SESSDATA") or None,
-            cookies_browser=os.environ.get("BILI_COOKIES_BROWSER", cls.cookies_browser),
-            cookies_profile=os.environ.get("BILI_COOKIES_PROFILE", ""),
+            cookies_browser=os.environ.get("HARVEST_COOKIES_BROWSER", cls.cookies_browser),
+            cookies_profile=os.environ.get("HARVEST_COOKIES_PROFILE", ""),
         )
-        if os.environ.get("BILI_CACHE_DIR"):
-            s.cache_dir = Path(os.environ["BILI_CACHE_DIR"])
-        if os.environ.get("BILI_OUT_DIR"):
-            s.out_dir = Path(os.environ["BILI_OUT_DIR"])
+        if os.environ.get("HARVEST_CACHE_DIR"):
+            s.cache_dir = Path(os.environ["HARVEST_CACHE_DIR"])
+        if os.environ.get("HARVEST_OUT_DIR"):
+            s.out_dir = Path(os.environ["HARVEST_OUT_DIR"])
         s.ffmpeg_path = find_ffmpeg()
         s.aria2c_path = find_aria2c()
         return s

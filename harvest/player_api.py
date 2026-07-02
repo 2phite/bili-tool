@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import urllib.request
+from datetime import datetime, timedelta, timezone
 
 import yt_dlp
 from pydantic import BaseModel, ValidationError
@@ -26,6 +27,21 @@ from .subtitles import _ZH_KEYS, parse_bcc, ydl_opts
 _API_VIEW = "https://api.bilibili.com/x/web-interface/view?bvid={bvid}"
 _API_PLAYER = "https://api.bilibili.com/x/player/v2?aid={aid}&cid={cid}&bvid={bvid}"
 _UA = "Mozilla/5.0"
+
+# bilibili.com is a China-domestic platform; `pubdate` is presented in China Standard Time.
+# Centralized here so a future scope expansion (bilibili.tv, YouTube) has one place to map
+# per-platform source timezones instead of hunting through call sites.
+SOURCE_TZ = timezone(timedelta(hours=8))  # CST / UTC+8
+
+
+def published_at_iso(pubdate: int | None) -> str | None:
+    """Convert a `pubdate` Unix-seconds epoch to an ISO 8601 string in `SOURCE_TZ`.
+
+    `None`/`0` (bilibili's "unknown" sentinel) both map to `None`.
+    """
+    if not pubdate:
+        return None
+    return datetime.fromtimestamp(pubdate, tz=SOURCE_TZ).isoformat()
 
 
 class ViewError(Exception):
@@ -49,6 +65,7 @@ class ViewData(BaseModel):
     title: str | None = None
     desc: str | None = None
     duration: int | None = None
+    pubdate: int | None = None  # Unix seconds, publish time (SPEC: published_at source)
     owner_mid: int | None = None
     owner_name: str | None = None
     pages: list[ViewPage] = []
@@ -137,6 +154,7 @@ def fetch_view(canonical: Canonical, settings: Settings, *, opener=None) -> View
             title=data.get("title"),
             desc=desc,
             duration=data.get("duration"),
+            pubdate=data.get("pubdate"),
             owner_mid=owner.get("mid"),
             owner_name=owner.get("name"),
             pages=pages,
@@ -183,4 +201,5 @@ def part_segments(
     segments = parse_bcc(raw)
     if not segments:
         return None
+    # language key (provenance set to "auto-sub" by subtitles._acquire)
     return (pick.get("lan") or "ai-zh"), segments

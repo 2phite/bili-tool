@@ -1,6 +1,6 @@
 """faster-whisper transcription (SPEC §5 step 3, §7).
 
-large-v3 on CUDA, language="zh", vad_filter=True, word_timestamps=True. Keeps the default
+large-v3 on CUDA, language configurable (None => auto-detect), vad_filter=True, word_timestamps=True. Keeps the default
 hallucination guards; --robust disables condition_on_previous_text for lectures that degrade into
 repetition loops. Audio is downloaded once and cached (D6: audio depends only on the video).
 """
@@ -12,7 +12,7 @@ from pathlib import Path
 import yt_dlp
 
 from .cache import fs_key
-from .config import Settings
+from .config import REFERER, Settings
 from .resolve import Canonical
 from .schema import Segment
 from .subtitles import ydl_opts
@@ -30,7 +30,8 @@ def download_audio(canonical: Canonical, settings: Settings) -> Path:
     if existing:
         return existing[0]
 
-    opts = ydl_opts(settings, skip_download=False)
+    referer = REFERER if canonical.platform == "bilibili.com" else None
+    opts = ydl_opts(settings, skip_download=False, referer=referer)
     opts.update({"format": "bestaudio/best", "outtmpl": str(audio_dir / f"{key}.%(ext)s")})
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(canonical.url, download=True)
@@ -60,7 +61,7 @@ def _register_cuda_dlls() -> None:
 
 
 def transcribe(
-    audio_path: Path, *, robust: bool = False, model: str = WHISPER_MODEL
+    audio_path: Path, *, robust: bool = False, model: str = WHISPER_MODEL, lang: str | None = None
 ) -> list[Segment]:
     _register_cuda_dlls()
     from faster_whisper import WhisperModel
@@ -68,7 +69,7 @@ def transcribe(
     wm = WhisperModel(model, device="cuda", compute_type="float16")
     segments, _info = wm.transcribe(
         str(audio_path),
-        language="zh",
+        language=lang,
         vad_filter=True,
         word_timestamps=True,
         condition_on_previous_text=not robust,

@@ -8,22 +8,14 @@ from __future__ import annotations
 
 import re
 import urllib.request
-from dataclasses import dataclass
 from typing import Callable
 from urllib.parse import parse_qs, urlparse
 
 from .config import REFERER
+from .providers.base import Canonical  # re-exported for backward-compatible import paths
 from .schema import Platform
 
 _COM_ID = re.compile(r"(BV[0-9A-Za-z]+|av\d+)", re.IGNORECASE)
-
-
-@dataclass(frozen=True)
-class Canonical:
-    platform: Platform
-    id: str
-    part: int
-    url: str
 
 
 def _expand_b23(url: str) -> str:

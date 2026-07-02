@@ -1,255 +1,251 @@
-# bili-tool — Build Spec
+# harvest — Design Spec
 
-> Authoritative build spec. Supersedes `Claude app initial project scoping.md` (kept only as a record).
-> Audience: Claude Code, implementing from a clean repo.
-> Last updated: 2026-06-28.
+> Authoritative design for **harvest**: a multi-source video → knowledge-bundle ingestion tool.
+> This is the single source of truth for *what* to build and *why*. [PROTOCOL.md](PROTOCOL.md) is
+> the machine-facing contract the downstream **Atlas** project codes against; [README.md](README.md)
+> is the human quickstart.
 >
-> **Companion: [DECISIONS.md](DECISIONS.md).** Where this spec is vague or silent, that log makes the
-> call and is authoritative on that point. Inline `→ D#` markers below point at the relevant decision.
-> Implement from this spec; cross-ref the cited `D#` when told to.
+> harvest is the successor to `bili-tool` (bilibili-only). It keeps that tool's proven, platform-
+> agnostic back-end and generalizes the acquisition front-end to multiple sources.
 
 ---
 
-## 1. Why this tool exists (don't skip — it sets the scope)
+## 1. What it is
 
-Bilibili is a **hard wall** for general-purpose agents. A plain request to `bilibili.com/video/...`
-returns **HTTP 412** even with a browser User-Agent; real stream/subtitle URLs return **403**
-without a `Referer` header, and most content needs a `SESSDATA` session cookie. Verified directly,
-2026-06-28.
+harvest is the **ingestion front-door** for the Atlas knowledge base. Given a video URL from a
+supported source, it produces a timeline-aligned, self-contained **bundle**:
 
-So this tool is the **ingestion front-door** for a downstream knowledge-base project: it turns an
-otherwise-inaccessible bilibili URL into a clean, immutable, timeline-aligned **bundle** that the Atlas
-layer ingests as a raw source. The tool's job **starts** at a URL and **ends** at that bundle. It does
-not summarize, extract entities, or write to the wiki — that judgment lives downstream. Keep this seam
-clean: bili-tool is a deterministic batch unit; everything interpretive happens elsewhere.
+- an **original-language transcript** (reuse trustworthy captions, else faster-whisper), and
+- **per-frame visual notes** (OCR + figure/slide captions via a local vision model).
 
----
+The tool **starts** at a URL and **ends** at `out/<id>-p<part>/` (`bundle.md` + `bundle.json` +
+`frames/`). It does **not** summarize or extract entities — that judgment lives downstream in Atlas.
+Keep this seam clean: harvest is a deterministic batch unit; everything interpretive happens
+elsewhere.
 
-## 2. Goal
+The defining superpower is **authenticated acquisition from walled/rich media sources, then do
+whatever with what you pulled** — today that "whatever" is the bundle; the architecture is built so
+future outputs (raw media collection, danmaku, thumbnails, AV remux) are additive.
 
-Given a bilibili URL, produce a **timeline-aligned bundle** of:
-- (a) an **original-language transcript** (segment-level, timestamped), and
-- (b) **independent per-frame visual notes** (OCR + figure/slide description),
+## 2. Scope
 
-ready for downstream summarization. Primary target: `bilibili.com` UGC lecture/talk content.
-`bilibili.tv` is a secondary path that should work but isn't optimized for.
+**v1 targets:** single **public** videos on **bilibili.com** and **YouTube**. Content is "people
+talking" (lectures, talks) — single-speaker, slide-or-talking-head.
 
----
+**Deferred** (architecture accommodates, not built): playlists, live VODs, members-only/age-gated
+bulk flows, `bilibili.tv`, and roadmap stages (danmaku, thumbnail metadata, AV remux for
+collection).
 
-## 3. Stack & prerequisites
+## 3. Stack
 
-- **Language:** Python 3.11 (the working interpreter on this box).
-- **Download + subtitle extraction:** `yt-dlp` via its **Python API** (not shelling out). Drive yt-dlp
-  rather than reimplementing bilibili's WBI signing/auth — keep reverse-engineered signing out of our code.
-- **Transcription:** `faster-whisper`, `large-v3` model. (Pin the latest stable version at scaffold time;
-  the earlier draft named 1.2.1 — verify current before pinning.)
-- **Frames:** `ffmpeg` (system binary) for extraction; **PySceneDetect** (`scenedetect`) for scene-cut
-  detection; `Pillow` + `imagehash` for perceptual dedup.
-- **Vision:** an OpenAI-compatible endpoint (LM Studio) serving a **Qwen3-VL GGUF** with its mmproj
-  projector. Talk to it via the `openai` Python client.
-- **Schema/validation:** `pydantic` v2.
-- **Hardware:** single RTX 4090, 24 GB (confirmed). large-v3 + a Qwen3-VL GGUF both fit comfortably.
+- **Python 3.11.** Download/metadata/subtitles via **yt-dlp** (Python API, not shelling out).
+- **Transcription:** `faster-whisper` `large-v3`, CUDA (RTX 4090). CUDA-12 runtime via `nvidia-*-cu12`
+  wheels registered on PATH (ctranslate2 uses plain `LoadLibrary`).
+- **Frames:** `ffmpeg` (system) periodic sampling; `Pillow` + `imagehash` phash dedup.
+- **Vision:** OpenAI-compatible endpoint (**LM Studio**) serving a VL model + its mmproj projector.
+- **Schema:** `pydantic` v2. **Downloads:** `aria2c` preferred for throttled CDNs, native fallback.
 
-**Prerequisites that are NOT yet installed on this machine** (flag to the user, don't assume):
-- `ffmpeg` — absent from PATH. Required by both yt-dlp (audio extraction/mux) and our frame stage.
-- `yt-dlp`, `faster-whisper` — absent. Install into the project venv.
-- LM Studio must be **running** with the Qwen3-VL model **and its mmproj loaded** before the vision stage.
+## 4. Architecture — modular monolith
 
----
+harvest is a **modular monolith**, not microservices: the pipeline shuttles large local artifacts
+(video, audio, frames) and is GPU-bound on one local GPU, so data locality and a shared local cache
+beat any network decomposition. Two internal seams give the extensibility of services without the
+distributed-systems tax:
 
-## 4. Repository layout
+### 4.1 Provider seam (per-source acquisition)
+
+A `Provider` is selected by URL and owns **only** the platform-specific acquisition. Everything
+downstream consumes normalized outputs and never sees a platform.
 
 ```
-bili-tool/
-├── SPEC.md                  # this file
-├── pyproject.toml           # deps, entry point
-├── README.md                # quickstart + prerequisites
-├── .env.example             # SESSDATA + LM Studio endpoint vars (never commit real .env)
-├── bili_tool/
-│   ├── __init__.py
-│   ├── cli.py               # CLI entry point
-│   ├── config.py            # settings + secret loading (SESSDATA, endpoint, paths)
-│   ├── resolve.py           # URL resolution: b23.tv expand, platform/id/part detection
-│   ├── subtitles.py         # yt-dlp subtitle probe (skip_download)
-│   ├── quality.py           # subtitle quality gate (sub vs whisper decision)
-│   ├── transcribe.py        # faster-whisper
-│   ├── frames.py            # ffmpeg + scenedetect extraction, imagehash dedup
-│   ├── vision.py            # per-frame captioning via OpenAI-compatible endpoint
-│   ├── merge.py             # timeline alignment → bundle.json + bundle.md
-│   ├── schema.py            # pydantic Bundle models (the interface contract)
-│   └── cache.py             # per-stage caching keyed by {platform}:{id}:{part}
-└── cache/                   # gitignored; per-stage artifacts
+Provider (protocol; one impl per source):
+  matches(url) -> bool                                 # registry selects the provider
+  resolve(url) -> Canonical                            # {platform, id, part, url}
+  auth_opts(settings) -> dict                          # yt-dlp opts fragment: platform auth
+  fetch_metadata(canonical, settings) -> SourceMetadata
+  enumerate_parts(canonical, settings) -> int          # bilibili: pages; youtube: 1
+  fetch_subtitle(canonical, settings, meta) -> list[Segment] | None
 ```
 
----
+- **`SourceMetadata`** is the normalized metadata type every provider produces. It **replaces**
+  the old `ViewData`-or-yt-dlp-`info` branching — `merge`/`probe` read only `SourceMetadata`, no
+  platform branches. bilibili fills it from the player API; YouTube from yt-dlp's `info`.
+- **Media download stays shared** (one yt-dlp downloader for audio/video). The provider contributes
+  only `auth_opts()` — the *one* thing that actually varies per source. A genuinely non-yt-dlp
+  source would be the trigger to push download into the provider; don't prepay for it.
+
+### 4.2 Stage sequence (per-capability processing)
+
+The agnostic core runs as a sequence of stages over local artifacts: **transcribe → frames →
+vision → merge**. Each is independent, cacheable, and skippable (`--no-vision`). This stays the
+existing implicit sequence — **not** formalized into a registry yet; that's a named-trigger later
+extraction. Future capabilities (danmaku, thumbnails, remux) slot in as new stages.
+
+### 4.3 The one external service
+
+The **LLM backend stays external** (LM Studio over HTTP). It earned a service boundary because it's
+heavy, separately managed, and potentially shared with Atlas. Nothing else does.
+
+### 4.4 When to extract a service later (named triggers, not now)
+
+1. A second concurrent GPU consumer → a job-queue worker service.
+2. Acquisition needs a different trust/network context than processing → split the *provider* layer
+   out along the seam that already exists.
+3. The bundle becomes a polled API → a thin serving layer *around* the monolith.
 
 ## 5. Core flow
 
-1. **Resolve URL** (`resolve.py`): expand `b23.tv` short links; detect `.com` vs `.tv`; extract video id
-   (`BV…`/`av…`) and **part index** (`?p=N`, default 1). Emit a canonical `{platform, id, part, url}`.
-2. **Probe for an existing original-language subtitle** (`subtitles.py`): call yt-dlp with
-   `skip_download=True`. This surfaces `.com` AI auto-captions (`ai-zh`) as a normal subtitle track —
-   no media touched, SRT text returned in-memory.
-   - **Multi-part assertion (critical):** yt-dlp issue #6357 is open — for multi-part videos it has
-     historically returned **part 1's subtitle for every part**. Assert the returned track actually
-     corresponds to the requested `part`; if it can't be verified, treat as "no usable sub" and fall
-     through to Whisper. Never silently align the wrong text. **→ D4** (two-tier: duration sanity +
-     part-1 identity check).
-3. **Decide transcript source** (`quality.py`):
-   - If a usable original-language sub exists, run it through the **quality gate** (see §7). If it
-     passes, use it. If it looks degraded, fall back to Whisper. **→ D5** (any single metric trips →
-     Whisper; thresholds in config, calibrated step 3).
-   - `--force-whisper` skips the sub entirely.
-   - Otherwise download audio and transcribe with faster-whisper (`language="zh"`, `vad_filter=True`,
-     `word_timestamps=True`, model `large-v3`).
-4. **Frames, in parallel** (`frames.py` → `vision.py`): **→ D7** (fingerprint-armed nonce projector
-   probe), **→ D8** (deduped frames shipped to the bundle dir for QA), **→ D10** (caption cache is
-   all-or-nothing).
-   - Extract candidate frames by **scene cut** (PySceneDetect content detector; configurable threshold).
-   - **Perceptual-dedup BEFORE captioning** (imagehash phash, near-duplicate collapse) — on lectures a
-     scene cut ≈ a slide change, so caption **one frame per stable segment**, not per raw cut. This is
-     the main cost lever (see §7).
-   - Caption each surviving frame **independently** with Qwen3-VL, prompted for OCR + figure/slide
-     extraction.
-5. **Merge** (`merge.py`): align transcript segments + frame notes on a shared timeline. Emit the
-   canonical `bundle.json` (the contract) plus a human-readable interleaved `bundle.md`. **→ D1**
-   (markdown is the *primary* ingestion surface, JSON is backing record — invert §6's framing),
-   **→ D2** (provenance promoted into a readable header), **→ D3** (markdown is slide-chunked; chunking
-   always defined, ~60–90s wall-clock fallback when no frame boundaries).
+1. **Resolve** — the registry picks a provider by URL; `provider.resolve(url)` → `Canonical
+   {platform, id, part, url}`. The single-part triple is the atomic, cached, identity-bearing unit.
+2. **Metadata** — `provider.fetch_metadata` → `SourceMetadata` (title, uploader, `uploader_id`,
+   duration, `published_at`, pages/parts). One cheap call; the source of truth for bundle metadata.
+3. **Transcript decision** — see §6.
+4. **Frames** (unless `--no-vision`): periodic sampling (`ffmpeg fps=1/interval`, default 6s) +
+   phash dedup **before** captioning (captioning is the cost sink; order matters). Then caption each
+   surviving frame independently with the VL model.
+5. **Merge** — align transcript segments + frame notes on a shared timeline; emit `bundle.json`
+   (precise backing record) and `bundle.md` (the product Atlas ingests).
 
-**Caching** (`cache.py`): every stage (audio, subs, transcript, frames, captions, bundle) is cached
-keyed by `{platform}:{id}:{part}`. Re-runs must not re-download, re-transcribe, or re-caption unchanged
-inputs. **→ D6** (key each stage by `video-identity + stage-param-hash`, not bare identity — the bare
-key silently ignores `--force-whisper`/`--scene-threshold`/`--robust`).
+**Caching** — every stage keyed by `video-identity + stage-param-hash`, never bare identity. Changing
+`--force-whisper`/`--dedup-threshold`/`--robust`/`--lang` must not force a re-download or
+re-transcribe of unrelated stages, but must not silently return a stale result computed under
+different params either.
 
----
+## 6. Transcript logic (per source)
 
-## 6. The bundle schema (interface contract — pin this, downstream depends on it)
+Common invariant: produce an **original-language** transcript; **never silently align the wrong
+text**; bias toward Whisper when in doubt (a subtly-wrong transcript hardens into accepted truth in
+Atlas — the worst failure mode). Provenance is recorded and load-bearing (§8).
 
-This is consumed by the Atlas project as a raw source landing in `raw/transcripts/`. Treat the shape as a
-stable API. **→ D1/D2: the Atlas actually ingests `bundle.md` (an LLM reads prose); `bundle.json` is the
-precise backing record, not the primary read. Provenance is promoted into a readable `bundle.md` header.
-The "canonical JSON / convenience markdown" framing below is inverted by D1 — keep the JSON precise, but
-the markdown is the product.** `bundle.json`:
+**bilibili** (unchanged from bili-tool):
+- Prefer human sub > AI caption; original zh only. yt-dlp does **not** surface bilibili AI subs, so a
+  cookie-authenticated `x/player/v2` fallback (no WBI signing) fetches them; `ai_type` 0 = original
+  transcription, 1 = translation (translations ignored).
+- **Quality gate** (any one metric trips → Whisper): punct density, dup ratio, non-CJK ratio, cps.
+  Thresholds are calibratable config, not law.
+- **#6357 two-tier assertion:** tier-1 duration sanity (last cue vs part duration, 0.70–1.10); tier-2
+  (part > 1) reject if text is near-identical to part 1 (yt-dlp's #6357 signature). Fail → Whisper.
 
-```jsonc
-{
-  "schema_version": "1.0",
-  "platform": "bilibili.com",          // or "bilibili.tv"
-  "id": "BV1xx411x7xx",
-  "part": 1,
-  "url": "https://www.bilibili.com/video/BV1xx411x7xx",
-  "title": "…",
-  "uploader": "…",
-  "duration_s": 1834,
-  "fetched_at": "2026-06-28T12:00:00Z",
-  "transcript": {
-    "source": "ai-zh" ,                // "human-sub" | "ai-zh" | "whisper"  ← provenance, load-bearing
-    "language": "zh",
-    "model": "large-v3",               // null when source is a subtitle
-    "robust": false,                   // condition_on_previous_text disabled?
-    "quality_gate": { "passed": true, "punct_density": 0.11, "dup_ratio": 0.02, "nonzh_ratio": 0.01 },
-    "segments": [ { "start": 0.0, "end": 4.2, "text": "…" } ]
-  },
-  "frames": [
-    { "ts": 12.5, "path": "frames/000012_500.png", "phash": "…", "caption": "…", "ocr": "…" }
-  ],
-  "meta": {
-    "cookies_used": true,
-    "referer_used": true,
-    "vision_model": "qwen3-vl-…",
-    "tool_version": "0.1.0"
-  }
-}
-```
+**YouTube** (simpler — yt-dlp is native, no wall, no player-API workaround):
+- **Human captions only** (`info["subtitles"]`), reused **only** on an **exact original-language key
+  match**. Resolve the target language as: `--lang` if the caller pinned it, else `info["language"]`
+  if truthy, else **unknown**. Then:
+  - unknown → **Whisper** (we cannot identify the original track; do **not** trust an arbitrary human
+    track — see probe wrinkle below);
+  - known `L` and `subtitles[L]` exists → reuse it (`human-sub`, language `L`);
+  - otherwise → Whisper.
+- **Auto-captions (`info["automatic_captions"]`) are never consulted** — probe confirmed they're a
+  separate dict (an un-gatable ASR/MT coin-flip of ~150 language variants); ignoring that dict is the
+  whole skip-auto rule.
+- **Exact key match only — no fuzzy/primary-subtag matching.** `subtitles` also carries hash-suffixed
+  *community translation* tracks (e.g. `en-US-njLgzgtehjs` on a Spanish video); a fuzzy `en ≈ en-US-…`
+  match would reuse a translation as if it were the original. Exact match avoids this.
+- **No quality gate** — it can't be reliably calibrated across unknown languages, so it would misfire.
+  Whisper is the safety net.
+- **Field mapping** (from the probe): `uploader_id` ← `info["channel_id"]` (`UC…`, stable — not the
+  mutable `@handle` in yt-dlp's `uploader_id`); `published_at` ← `info["timestamp"]` (unix epoch →
+  UTC `…Z`), falling back to `upload_date` (`YYYYMMDD` → `T00:00:00Z`); subtitle tracks are
+  `list[{ext,url,name}]` — fetch the **`vtt`** entry and parse WebVTT (`parse_vtt`, alongside the
+  existing `parse_bcc`/`parse_srt`).
 
-**Why `transcript.source` matters:** the downstream Atlas does self-rewriting, auto-resolving contradiction
-handling, and it ranks competing claims by source authority. Provenance is that authority signal —
-`human-sub` > clean `whisper` > degraded `ai-zh`. This field is not cosmetic; it's an input to the wiki's
-reconciliation logic. Always populate it accurately.
+**Language:** default `language=None` (Whisper auto-detects from the opening window). Shared `--lang`
+override lets the caller pin the language (from probe hints); platform-aware default is `zh` for
+bilibili, `None` for YouTube. Whisper picks one language for the whole audio (no code-switching), so
+`--lang` is how a caller deliberately pins the dominant language of mixed content.
 
-Also emit `bundle.md`: transcript and frame notes interleaved in timeline order, human-scannable. The
-JSON is canonical; the markdown is a convenience/QA artifact.
+## 7. Testing
 
----
+Deterministic and **offline** by default: inject `opener`s returning canned JSON, use trimmed yt-dlp
+`info` dicts as fixtures, never touch the network in the default suite. One opt-in `@live` smoke test
+(excluded from the default run) hits a single known-stable public video to catch drift. Capture
+trimmed fixtures early — they double as documentation of the provider contract surface.
 
-## 7. Hard constraints & non-obvious traps (the stuff that bites)
+**Must-verify empirical probes — RESOLVED (5-video live probe, yt-dlp 2026.06.09):**
+1. Is `info["language"]` reliable? **No — treat as best-effort.** Correct when present (`en`,`ko`),
+   but `None` for 2/5, including a Spanish video that *did* carry an `es` track. `language=None` does
+   **not** mean "no captions." → §6's degradation stands: unknown language ⇒ straight to Whisper.
+2. Human vs auto distinct? **Yes, cleanly** — separate `subtitles` / `automatic_captions` dicts; a
+   human `en` and auto `en` coexist without overlap. §6's skip-auto rule is enforceable by ignoring
+   `automatic_captions`. (Wrinkle: `subtitles` also holds hash-suffixed community translations →
+   exact-key-match only; see §6.)
 
-- **Referer is mandatory.** Stream and subtitle URLs 403 without a bilibili `Referer`. yt-dlp's bilibili
-  extractor sets this, but if you ever touch a URL directly (e.g. fetching a frame thumbnail or stream),
-  set `Referer: https://www.bilibili.com`.
-- **Cookies (`SESSDATA`)** are required for most `.com` subtitles and higher-quality streams. Load from a
-  secret (env var / `.env` / cookies file), pass to yt-dlp, **never log it**, never commit it. `.env.example`
-  documents the var; real `.env` is gitignored. **→ D9** (default is `--cookies-from-browser` with a
-  Firefox profile; `.env` SESSDATA is the fallback), **→ D11** (no stale-cookie detector; fail loud only
-  if the cookie *source* fails; `meta.cookies_used` means "supplied," not "honored").
-- **Multi-part subtitle bug (#6357)** — see §5 step 2. Assert part match or fall back.
-- **`ai-zh` quality is a coin-flip on lectures.** Default heuristic is NOT "trust the sub." Run the
-  **quality gate**: flag degraded subs by low punctuation density, high segment-duplication ratio (repetition),
-  abnormal length-vs-duration, or high non-CJK garbage ratio → auto-fall-back to Whisper. In a compounding
-  Atlas, a subtly-wrong transcript is the worst failure mode (bad facts harden into accepted truth), so bias
-  toward Whisper when in doubt. Keep `--force-whisper` as the manual override.
-- **faster-whisper repetition guard:** keep the default hallucination guards. Expose a `--robust` switch
-  that disables `condition_on_previous_text` for lectures that degrade into repetition loops.
-- **Vision must fail loud:** at startup, verify the mmproj projector is actually loaded by sending one tiny
-  test image and confirming a non-empty, image-grounded response. If the projector isn't loaded the model
-  **silently ignores images** and emits plausible hallucinated captions — the most dangerous silent failure
-  here. If the REST endpoint rejects base64 data-URI images, fall back to the LM Studio SDK path. **→ D7**
-  ("non-empty" is too weak — the check is a **nonce-OCR** round-trip the model can't pass blind, armed by a
-  loaded-model **fingerprint** so it only fires after LM Studio state changes; transport is one-time
-  plumbing settled in build step 5).
-- **Perceptual dedup before VL**, not after — captioning is the cost/time sink. Order matters.
+Trimmed fixtures seeding the four YouTube branches live in `tests/fixtures/youtube/`
+(`dQw4w9WgXcQ` human-sub, `kJQP7kiw5Fk` language-None→whisper, `9bZkp7q19f0` no-human-sub→whisper,
+`aqz-KE-bpKQ` no-captions baseline).
 
----
+## 8. Design decisions & rationale (the calls that govern the code)
 
-## 8. Build order (validate the spine before wiring the expensive stages)
+- **bundle.md is the product; bundle.json is the backing record.** Atlas is an LLM reading prose, not
+  an indexer reading fields. Provenance and the transcript decision live in a readable `bundle.md`
+  header, because the model weighs authority the way it weighs any source's — there is no code
+  ranking `transcript.source`.
+- **Provenance = production method, separate from language.** `human-sub` | `auto-sub` | `whisper`;
+  language is its own field. Authority order (documented for Atlas): `human-sub` > `whisper` >
+  `auto-sub`.
+- **bundle.md is slide-chunked, always.** Chunk = "what was on screen + the speech while it was up."
+  Boundaries = deduped frame timestamps when vision is on, else a fixed wall-clock window (~75s).
+  Segments assigned whole by start timestamp, never split. One coarse `[mm:ss]` header per chunk.
+- **Frame candidates = periodic sampling + phash dedup**, not scene-cut detection: target content is
+  continuous-shot screen recordings with soft slide transitions (no hard cuts). Same goal ("one frame
+  per stable slide"), more robust mechanism. Dedup compares against the last *kept* frame.
+- **Cache keys = identity + stage-param-hash** (§5). The bare key silently returns a cached `auto-sub`
+  transcript when you pass `--force-whisper` — a correctness bug, not just staleness.
+- **Projector check = fingerprint-armed nonce-OCR probe.** A missing mmproj makes the VL model return
+  confident, well-formed, hallucinated captions while every health check passes. At vision-stage start
+  hash the loaded-model metadata; on change, render a PNG with a random nonce and require the model to
+  read it back. Fail → hard-stop, loud error. Never degrade to silent caption-less frames.
+- **Delivered bundle = self-contained `out/<id>-p<part>/`.** Frame PNGs ship for *your* QA/reprocessing
+  (Atlas reads only the markdown text); `--no-frame-images` omits them (JSON keeps phash/ts/caption).
+  `cache/` holds expensive intermediates (raw audio, pre-dedup frames), gitignored.
+- **Auth is per-provider `auth_opts()`.** bilibili: cookies effectively required — default
+  `--cookies-from-browser` (Firefox; Chromium locks the DB on Windows), `.env` SESSDATA fallback.
+  YouTube: cookies **optional** — public videos need none; a configured browser profile unlocks
+  age-gated/bot-checked content. No stale-cookie detector; fail loud only if the cookie *source*
+  itself fails. `meta.cookies_used` means "supplied," not "honored."
+- **`published_at` timezone is per-provider.** bilibili is China Standard Time (`+08:00`); YouTube is
+  UTC. Centralized so each provider maps its own source timezone.
+- **Single-part atomic unit; `--all-parts` is isolate-and-continue.** `{platform, id, part}` → one
+  bundle dir. `--all-parts` loops the single-part pipeline; a failed part logs and continues; re-runs
+  skip done parts via caching. YouTube v1 is always `part=1`; a future playlist entry maps to a part.
+- **CLI verb grammar.** `harvest <verb> <url>`: `ingest` (full pipeline), `probe` (cheap metadata, no
+  media). No bare-url form. Scales to future verbs (`collect`, …) and sources.
 
-Get the **cheapest end-to-end path working first**, on a real video, before Whisper or vision:
-
-1. Scaffold: repo layout, `pyproject.toml`, config/secret loading, pydantic `Bundle` schema, stubbed stages.
-2. **Spine:** `resolve → subtitle probe → bundle.json` (transcript-only, frames empty). This validates the
-   yt-dlp / cookie / Referer / multi-part plumbing on a real URL in minutes. Everything else hangs off a
-   spine you've confirmed works.
-3. Add the **quality gate + Whisper fallback**.
-4. Add **frames + perceptual dedup** (still no vision — emit frame stubs with phash/ts).
-5. Add **vision captioning** (with the fail-loud projector check).
-6. Add **per-stage caching** and the `bundle.md` renderer.
-
-Each step ends with a runnable CLI invocation against a real bilibili lecture.
-
----
-
-## 9. CLI
+## 9. Repository layout (target)
 
 ```
-bili-tool <url> [--part N] [--all-parts] [--force-whisper] [--robust] [--no-vision]
-                [--scene-threshold F] [--out DIR] [--no-frame-images]
+harvest/
+├── SPEC.md · PROTOCOL.md · README.md
+├── pyproject.toml · .env.example
+├── harvest/
+│   ├── cli.py              # verb dispatch, per-part orchestration
+│   ├── config.py           # settings + per-provider auth/secret loading
+│   ├── schema.py           # pydantic Bundle/SourceMetadata/ProbeResult (the contract)
+│   ├── providers/          # provider registry + one module per source
+│   │   ├── base.py         #   Provider protocol, SourceMetadata, registry
+│   │   ├── bilibili.py     #   resolve + player-API metadata/subtitles (was resolve/player_api)
+│   │   └── youtube.py      #   resolve + yt-dlp-native metadata/subtitles
+│   ├── subtitles.py        # shared yt-dlp subtitle plumbing + parsers (bcc/srt)
+│   ├── quality.py          # bilibili quality gate
+│   ├── transcribe.py       # faster-whisper (shared, --lang aware)
+│   ├── frames.py · vision.py · merge.py · cache.py
+└── cache/                  # gitignored per-stage artifacts
 ```
 
-Defaults: auto part detection, quality-gated sub→whisper decision, vision on. **→ D12** (`--all-parts`
-is an optional isolate-and-continue loop over the single-part unit), **→ D8** (`--no-frame-images` omits
-PNGs from `out/`; default ships them for QA).
+> The package rename (`bili_tool` → `harvest`), env prefix (`BILI_*`/`SESSDATA` → `HARVEST_*` +
+> per-provider), and git remote are a mechanical pass folded into the refactor.
 
----
+## 10. Known follow-ups (deferred, not defects)
 
-## 10. Out of scope for v1
+These are economy/purity trade-offs surfaced by the YouTube whole-branch review. None affect
+correctness; each is a deliberate consequence of keeping the provider seam clean (metadata does not
+leak provider-internal fetch state — e.g. bilibili `ViewData` — through `SourceMetadata`).
 
-- Speaker diarization (lectures are single-speaker; skip WhisperX).
-- `.com` AI-vs-human subtitle flag filtering beyond the quality gate.
-- Translation tracks.
-- Any summarization / entity extraction / wiki integration — that's the downstream Atlas project's job.
-
----
-
-## 11. Open config the implementer should surface to the user
-
-> Several of these are resolved in [DECISIONS.md](DECISIONS.md): SESSDATA storage **→ D9**; output root /
-> bundle dir shape **→ D8**; scene threshold default **→ D3/Deferred**. The LM Studio endpoint + model
-> name and the faster-whisper pin remain genuine confirm-at-scaffold items.
-
-
-- Exact LM Studio endpoint URL + model name for Qwen3-VL (and confirm mmproj is loaded).
-- Where `SESSDATA` will be stored (env var vs `.env` vs cookies.txt export).
-- Scene-detection threshold default (tune on one real lecture during step 4).
-- Output root for bundles (the Atlas's `raw/transcripts/` lives in a separate repo — for now write to a local
-  `out/` and let the Atlas pull/copy; do NOT hardcode the wiki path here, keep the seam clean).
+- **Redundant per-part metadata fetch (bilibili).** `fetch_metadata` runs the view API, then
+  `fetch_subtitle` re-runs `extract_info` + a second view call (more for `part > 1`). `meta` is passed
+  into `fetch_subtitle` but unused. Worth a design pass on whether the seam can carry a reusable
+  handle without re-leaking `ViewData`. (`providers/bilibili.py`, `cli.py` per-part path)
+- **Double `extract_info` (YouTube).** `fetch_metadata` and `fetch_subtitle` each extract in
+  production. Same root cause and same fix shape as the bilibili item. (`providers/youtube.py`)
+- **`.tv` guard is a platform control-flow branch**, duplicated in `cli.py` (ingest) and `probe.py`
+  rather than expressed through the provider registry — a seam-purity wrinkle, unreachable-path today.
+- **Dead field `SubtitleResult.last_cue_end`** (pre-existing), cleanup only. (`subtitles.py`)

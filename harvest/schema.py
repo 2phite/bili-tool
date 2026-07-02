@@ -2,7 +2,10 @@
 stable API. bundle.md is the primary ingestion surface (D1); this JSON is the precise backing
 record. Bump SCHEMA_VERSION on any breaking change to the field shape.
 
-1.1 added `uploader_mid` and `description` (additive, nullable — backward compatible).
+1.0 is the fresh multi-source contract: `uploader_id` (string, all sources) replaces the
+bilibili-only integer `uploader_mid`; `Platform` includes `youtube.com`; `TranscriptSource`
+renames bilibili's `"ai-zh"` provenance label to the source-neutral `"auto-sub"`, with language
+now tracked separately on `Transcript.language`.
 """
 
 from __future__ import annotations
@@ -11,10 +14,10 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-SCHEMA_VERSION = "1.1"
+SCHEMA_VERSION = "1.0"
 
-Platform = Literal["bilibili.com", "bilibili.tv"]
-TranscriptSource = Literal["human-sub", "ai-zh", "whisper"]
+Platform = Literal["bilibili.com", "bilibili.tv", "youtube.com"]
+TranscriptSource = Literal["human-sub", "auto-sub", "whisper"]
 
 
 class Segment(BaseModel):
@@ -42,7 +45,7 @@ class QualityGate(BaseModel):
 class Transcript(BaseModel):
     source: TranscriptSource  # provenance, load-bearing for downstream authority ranking (SPEC §6)
     source_reason: str  # human-readable decision, promoted into the bundle.md header (D2)
-    language: str = "zh"
+    language: str | None = None
     model: str | None = None  # whisper model id; null when source is a subtitle
     robust: bool = False  # condition_on_previous_text disabled? (SPEC §7)
     quality_gate: QualityGate | None = None
@@ -73,9 +76,10 @@ class ProbeResult(BaseModel):
     id: str
     title: str | None = None
     uploader: str | None = None
-    uploader_mid: int | None = None
+    uploader_id: str | None = None
     description: str | None = None
     duration_s: int | None = None
+    published_at: str | None = None  # ISO 8601, video's publish time (SPEC: bilibili pubdate)
     parts: int
     part_durations_s: list[int | None] = Field(default_factory=list)
 
@@ -88,9 +92,10 @@ class Bundle(BaseModel):
     url: str
     title: str | None = None
     uploader: str | None = None
-    uploader_mid: int | None = None
+    uploader_id: str | None = None
     description: str | None = None
     duration_s: int | None = None
+    published_at: str | None = None  # ISO 8601, video's publish time (SPEC: bilibili pubdate)
     fetched_at: str  # ISO 8601 UTC, e.g. "2026-06-28T12:00:00Z"
     transcript: Transcript
     frames: list[Frame] = Field(default_factory=list)

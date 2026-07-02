@@ -1,10 +1,9 @@
 import json
 
-from bili_tool.config import Settings
-from bili_tool.merge import build_bundle, chunk, render_markdown, write_bundle
-from bili_tool.player_api import ViewData
-from bili_tool.resolve import Canonical
-from bili_tool.schema import Bundle, Frame, Meta, Segment, Transcript
+from harvest.config import Settings
+from harvest.merge import build_bundle, chunk, render_markdown, write_bundle
+from harvest.providers.base import Canonical, SourceMetadata
+from harvest.schema import Bundle, Frame, Meta, Segment, Transcript
 
 
 def _seg(start, end, text="x"):
@@ -110,51 +109,37 @@ def test_empty_chunks_dropped():
     assert all(c.segments or c.frames for c in chunks)
 
 
-def test_build_bundle_with_view_present_wins_over_ytdlp():
-    view = ViewData(
-        aid=1,
-        cid=2,
-        title="View Title",
-        desc="View description.",
-        duration=123,
-        owner_mid=999,
-        owner_name="View Owner",
-        pages=[],
+def test_build_bundle_consumes_source_metadata():
+    meta = SourceMetadata(
+        platform="bilibili.com", id="BV1", title="View Title", uploader="View Owner",
+        uploader_id="999", description="View description.", duration_s=123,
+        published_at="2024-06-28T16:00:00+08:00", parts=1, part_durations_s=[123],
     )
-    info = {
-        "title": "ytdlp title",
-        "uploader": "ytdlp uploader",
-        "duration": 456,
-        "description": "ytdlp description",
-    }
-    bundle = build_bundle(
-        _canonical(), info, _transcript(), [], _settings(), view=view
-    )
+    bundle = build_bundle(_canonical(), meta, _transcript(), [], _settings())
     assert bundle.title == "View Title"
     assert bundle.uploader == "View Owner"
     assert bundle.duration_s == 123
-    assert bundle.uploader_mid == 999
+    assert bundle.uploader_id == "999"
     assert bundle.description == "View description."
+    assert bundle.published_at == "2024-06-28T16:00:00+08:00"
 
 
-def test_build_bundle_with_view_none_falls_back_to_ytdlp():
-    info = {
-        "title": "ytdlp title",
-        "uploader": "ytdlp uploader",
-        "duration": 456,
-        "description": "ytdlp description",
-    }
-    bundle = build_bundle(
-        _canonical(), info, _transcript(), [], _settings(), view=None
+def test_build_bundle_with_missing_metadata_fields_is_none():
+    meta = SourceMetadata(
+        platform="youtube.com", id="x", title="yt title", uploader="yt uploader",
+        uploader_id=None, description="yt description", duration_s=456,
+        published_at=None, parts=1, part_durations_s=[456],
     )
-    assert bundle.title == "ytdlp title"
-    assert bundle.uploader == "ytdlp uploader"
+    bundle = build_bundle(_canonical(), meta, _transcript(), [], _settings())
+    assert bundle.title == "yt title"
+    assert bundle.uploader == "yt uploader"
     assert bundle.duration_s == 456
-    assert bundle.uploader_mid is None
-    assert bundle.description == "ytdlp description"
+    assert bundle.uploader_id is None
+    assert bundle.description == "yt description"
+    assert bundle.published_at is None
 
 
-def test_render_markdown_emits_uploader_mid_and_description_section():
+def test_render_markdown_emits_uploader_id_and_description_section():
     bundle = Bundle(
         platform="bilibili.com",
         id="BV1",
@@ -162,7 +147,7 @@ def test_render_markdown_emits_uploader_mid_and_description_section():
         url="https://b/video/BV1",
         title="My Title",
         uploader="My Uploader",
-        uploader_mid=42,
+        uploader_id="42",
         description="Line one.\n\nLine two with a URL: https://example.com",
         fetched_at="2026-06-29T00:00:00Z",
         transcript=Transcript(source="whisper", source_reason="test", segments=[_seg(0, 5)]),
@@ -170,10 +155,10 @@ def test_render_markdown_emits_uploader_mid_and_description_section():
         meta=Meta(cookies_used=False, referer_used=True, tool_version="t"),
     )
     md = render_markdown(bundle, _settings())
-    assert "uploader_mid: 42" in md
+    assert "uploader_id: 42" in md
     lines = md.splitlines()
     uploader_idx = next(i for i, l in enumerate(lines) if l.startswith("uploader:"))
-    mid_idx = next(i for i, l in enumerate(lines) if l.startswith("uploader_mid:"))
+    mid_idx = next(i for i, l in enumerate(lines) if l.startswith("uploader_id:"))
     assert mid_idx == uploader_idx + 1
     assert "## Description" in md
     assert "Line one." in md
@@ -183,6 +168,46 @@ def test_render_markdown_emits_uploader_mid_and_description_section():
     desc_idx = next(i for i, l in enumerate(lines) if l == "## Description")
     transcript_idx = next(i for i, l in enumerate(lines) if l.startswith("## ["))
     assert h1_idx < desc_idx < transcript_idx
+
+
+def test_render_markdown_emits_published_at_after_duration():
+    bundle = Bundle(
+        platform="bilibili.com",
+        id="BV1",
+        part=1,
+        url="https://b/video/BV1",
+        title="My Title",
+        uploader="My Uploader",
+        published_at="2024-06-28T16:00:00+08:00",
+        duration_s=60,
+        fetched_at="2026-06-29T00:00:00Z",
+        transcript=Transcript(source="whisper", source_reason="test", segments=[_seg(0, 5)]),
+        frames=[],
+        meta=Meta(cookies_used=False, referer_used=True, tool_version="t"),
+    )
+    md = render_markdown(bundle, _settings())
+    lines = md.splitlines()
+    assert "published_at: 2024-06-28T16:00:00+08:00" in lines
+    duration_idx = next(i for i, l in enumerate(lines) if l.startswith("duration:"))
+    published_idx = next(i for i, l in enumerate(lines) if l.startswith("published_at:"))
+    assert published_idx == duration_idx + 1
+
+
+def test_render_markdown_published_at_empty_when_none():
+    bundle = Bundle(
+        platform="bilibili.com",
+        id="BV1",
+        part=1,
+        url="https://b/video/BV1",
+        title="My Title",
+        uploader="My Uploader",
+        fetched_at="2026-06-29T00:00:00Z",
+        transcript=Transcript(source="whisper", source_reason="test", segments=[_seg(0, 5)]),
+        frames=[],
+        meta=Meta(cookies_used=False, referer_used=True, tool_version="t"),
+    )
+    md = render_markdown(bundle, _settings())
+    assert "published_at: " in md.splitlines()
 
 
 def test_render_markdown_omits_description_section_when_none():
@@ -200,7 +225,7 @@ def test_render_markdown_omits_description_section_when_none():
     )
     md = render_markdown(bundle, _settings())
     assert "## Description" not in md
-    assert "uploader_mid: " in md  # still emitted, empty
+    assert "uploader_id: " in md  # still emitted, empty
 
 
 def test_render_markdown_description_with_literal_dashes_and_hash_line_is_safe():
@@ -216,7 +241,7 @@ def test_render_markdown_description_with_literal_dashes_and_hash_line_is_safe()
         url="https://b/video/BV1",
         title="My Title",
         uploader="My Uploader",
-        uploader_mid=42,
+        uploader_id="42",
         description=description,
         fetched_at="2026-06-29T00:00:00Z",
         transcript=Transcript(source="whisper", source_reason="test", segments=[_seg(0, 5)]),
@@ -241,8 +266,9 @@ def test_render_markdown_description_with_literal_dashes_and_hash_line_is_safe()
         "url: https://b/video/BV1",
         "title: My Title",
         "uploader: My Uploader",
-        "uploader_mid: 42",
+        "uploader_id: 42",
         "duration: ?",
+        "published_at: ",
         "fetched_at: 2026-06-29T00:00:00Z",
         "transcript_source: whisper (test)",
         "vision_model: none",
@@ -265,7 +291,7 @@ def test_render_markdown_description_with_literal_dashes_and_hash_line_is_safe()
 
 def test_bundle_json_roundtrips_new_fields(tmp_path):
     bundle = _bundle_with_frame(None)
-    bundle.uploader_mid = 123
+    bundle.uploader_id = "123"
     bundle.description = "desc text"
     settings = Settings()
     settings.out_dir = tmp_path / "out"
@@ -273,5 +299,5 @@ def test_bundle_json_roundtrips_new_fields(tmp_path):
     out = write_bundle(bundle, settings, frame_sources={}, frame_images=False)
 
     data = json.loads((out / "bundle.json").read_text(encoding="utf-8"))
-    assert data["uploader_mid"] == 123
+    assert data["uploader_id"] == "123"
     assert data["description"] == "desc text"

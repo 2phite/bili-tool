@@ -1,15 +1,16 @@
 import pytest
 
-from bili_tool.config import Settings
-from bili_tool.player_api import ViewError
-from bili_tool.probe import probe
-from bili_tool.resolve import Canonical
-from bili_tool.schema import ProbeResult
+from harvest.config import Settings
+from harvest.player_api import ViewError
+from harvest.probe import probe
+from harvest.resolve import Canonical
+from harvest.schema import ProbeResult
 from tests.test_player_api import _FakeOpener, _view_url
 
 
 def _canonical(platform: str = "bilibili.com", part: int = 1) -> Canonical:
-    return Canonical(platform, "BV1", part, f"https://b/video/BV1?p={part}")
+    host = "www.bilibili.com" if platform == "bilibili.com" else "www.bilibili.tv"
+    return Canonical(platform, "BV1", part, f"https://{host}/video/BV1?p={part}")
 
 
 def test_probe_maps_full_fixture_to_probe_result():
@@ -22,6 +23,7 @@ def test_probe_maps_full_fixture_to_probe_result():
             "title": "My Video",
             "desc": "A description.",
             "duration": 600,
+            "pubdate": 1719561600,
             "owner": {"mid": 7, "name": "Uploader"},
             "pages": [
                 {"page": 1, "cid": 100, "part": "Part One", "duration": 300},
@@ -38,11 +40,33 @@ def test_probe_maps_full_fixture_to_probe_result():
     assert result.id == "BV1"
     assert result.title == "My Video"
     assert result.uploader == "Uploader"
-    assert result.uploader_mid == 7
+    assert result.uploader_id == "7"
     assert result.description == "A description."
     assert result.duration_s == 600
+    assert result.published_at == "2024-06-28T16:00:00+08:00"
     assert result.parts == 2
     assert result.part_durations_s == [300, 300]
+
+
+def test_probe_published_at_none_when_pubdate_missing():
+    canonical = _canonical()
+    payload = {
+        "code": 0,
+        "data": {
+            "aid": 1,
+            "cid": 555,
+            "title": "Solo",
+            "desc": "",
+            "duration": 120,
+            "owner": {"mid": 1, "name": "Solo Uploader"},
+            "pages": [],
+        },
+    }
+    opener = _FakeOpener({_view_url(canonical): payload})
+
+    result = probe(canonical, Settings(), opener=opener)
+
+    assert result.published_at is None
 
 
 def test_probe_single_part_synthesizes_one_page():
@@ -84,3 +108,46 @@ def test_probe_propagates_view_error():
 
     with pytest.raises(ViewError):
         probe(canonical, Settings(), opener=opener)
+
+
+def test_schema_version_is_1_0():
+    from harvest.schema import SCHEMA_VERSION
+    assert SCHEMA_VERSION == "1.0"
+
+
+def test_probe_result_uses_uploader_id_string():
+    from harvest.schema import ProbeResult
+    r = ProbeResult(platform="youtube.com", id="x", uploader_id="UCabc", parts=1)
+    assert r.uploader_id == "UCabc"
+    assert not hasattr(r, "uploader_mid")
+
+
+def test_probe_youtube_delegates_to_provider(monkeypatch):
+    import sys
+
+    import harvest  # noqa: F401  ensure harvest.probe submodule is registered in sys.modules
+
+    from harvest.providers.base import Canonical, SourceMetadata
+
+    # NOTE: `harvest/__init__.py` does `from .probe import probe`, which shadows the
+    # `harvest.probe` *submodule* with the `probe` *function* as a package attribute. So
+    # `from harvest import probe` gets the function, not the module. Go via sys.modules to
+    # reach the real module object for monkeypatching `select_provider`.
+    probe_mod = sys.modules["harvest.probe"]
+    from harvest.schema import ProbeResult
+
+    canonical = Canonical("youtube.com", "dQw4w9WgXcQ", 1, "https://youtu.be/dQw4w9WgXcQ")
+
+    class _FakeYT:
+        def fetch_metadata(self, c, settings):
+            return SourceMetadata(
+                platform="youtube.com", id="dQw4w9WgXcQ", title="T", uploader="C",
+                uploader_id="UCx", description="d", duration_s=100,
+                published_at="2009-10-25T06:57:33Z", parts=1, part_durations_s=[100])
+
+    monkeypatch.setattr(probe_mod, "select_provider", lambda url: _FakeYT())
+    result = probe_mod.probe(canonical, Settings())
+    assert isinstance(result, ProbeResult)
+    assert result.platform == "youtube.com"
+    assert result.uploader_id == "UCx"
+    assert result.published_at.endswith("Z")

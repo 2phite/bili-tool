@@ -26,16 +26,20 @@ _ZH_KEYS = ("zh-Hans", "zh-CN", "zh", "ai-zh")
 @dataclass
 class SubtitleResult:
     found: bool
-    source: str | None  # "human-sub" | "ai-zh" | None
+    source: str | None  # "human-sub" | "auto-sub" | None
     lang: str | None
     segments: list[Segment] = field(default_factory=list)
     reason: str = ""  # human-readable, flows into the D2 bundle.md header
     last_cue_end: float | None = None
 
 
-def ydl_opts(settings: Settings, *, skip_download: bool = True) -> dict:
-    """Common yt-dlp options: auth (D9), Referer (§7), ffmpeg location."""
-    headers = {"Referer": REFERER}
+def ydl_opts(settings: Settings, *, skip_download: bool = True, referer: str | None = REFERER) -> dict:
+    """Common yt-dlp options: auth (D9), Referer (§7, scoped to bilibili by default — YouTube
+    callers pass referer=None so bilibili's Referer is never sent on YouTube requests), ffmpeg
+    location."""
+    headers: dict = {}
+    if referer:
+        headers["Referer"] = referer
     opts: dict = {
         "skip_download": skip_download,
         "quiet": True,
@@ -87,7 +91,7 @@ def _pick_track(info: dict) -> tuple[str, str, list] | None:
             return "human-sub", key, human[key]
     for key in _ZH_KEYS:
         if key in auto:
-            return "ai-zh", key, auto[key]
+            return "auto-sub", key, auto[key]
     return None
 
 
@@ -142,6 +146,25 @@ def parse_srt(text: str) -> list[Segment]:
     return out
 
 
+def parse_vtt(text: str) -> list[Segment]:
+    """WebVTT (YouTube timed-text). Blank-line-delimited cue blocks; a cue block has a timing
+    line (optional cue-id line above it). WEBVTT header and NOTE blocks lack a timing line and
+    are skipped. Text lines after the timing line are joined with spaces."""
+    out: list[Segment] = []
+    for block in re.split(r"\n\s*\n", text.strip()):
+        m = _SRT_TIME.search(block)
+        if not m:
+            continue
+        h1, m1, s1, ms1, h2, m2, s2, ms2 = map(int, m.groups())
+        start = h1 * 3600 + m1 * 60 + s1 + ms1 / 1000
+        end = h2 * 3600 + m2 * 60 + s2 + ms2 / 1000
+        lines = block.split("\n")
+        ti = next((i for i, ln in enumerate(lines) if "-->" in ln), 0)
+        body = " ".join(ln.strip() for ln in lines[ti + 1:] if ln.strip())
+        out.append(Segment(start=start, end=end, text=body))
+    return out
+
+
 def _segments_text(segments: list[Segment]) -> str:
     """Normalized concatenation of cue text — the comparison surface for the #6357 check."""
     return "".join(s.text.strip() for s in segments)
@@ -191,7 +214,7 @@ def _acquire(
     if got is None:
         return None
     lang, segments = got
-    return "ai-zh", lang, segments
+    return "auto-sub", lang, segments
 
 
 def fetch_subtitle_segments(

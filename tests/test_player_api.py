@@ -2,16 +2,17 @@ import json
 
 import pytest
 
-from bili_tool.config import Settings
-from bili_tool.player_api import (
+from harvest.config import Settings
+from harvest.player_api import (
     ViewData,
     ViewError,
     ViewPage,
     cid_for_part,
     fetch_view,
+    published_at_iso,
     select_zh_subtitle,
 )
-from bili_tool.resolve import Canonical
+from harvest.resolve import Canonical
 
 
 def test_cid_for_part_matches_page_number():
@@ -92,7 +93,7 @@ def _canonical(part: int = 1) -> Canonical:
 
 
 def _view_url(canonical: Canonical) -> str:
-    from bili_tool.player_api import _API_VIEW
+    from harvest.player_api import _API_VIEW
 
     return _API_VIEW.format(bvid=canonical.id)
 
@@ -161,6 +162,58 @@ def test_fetch_view_synthesizes_single_page_when_pages_empty():
     assert page.duration == 120
 
 
+def test_published_at_iso_converts_epoch_to_cst_offset():
+    # 2024-06-28T08:00:00Z -> 2024-06-28T16:00:00+08:00 in bilibili's native CST.
+    assert published_at_iso(1719561600) == "2024-06-28T16:00:00+08:00"
+
+
+def test_published_at_iso_none_for_none():
+    assert published_at_iso(None) is None
+
+
+def test_published_at_iso_none_for_zero():
+    assert published_at_iso(0) is None
+
+
+def test_fetch_view_parses_pubdate():
+    canonical = _canonical()
+    payload = {
+        "code": 0,
+        "data": {
+            "aid": 1,
+            "cid": 555,
+            "title": "Solo",
+            "desc": "d",
+            "duration": 120,
+            "pubdate": 1719561600,
+            "owner": {"mid": 1, "name": "Solo Uploader"},
+            "pages": [],
+        },
+    }
+    opener = _FakeOpener({_view_url(canonical): payload})
+    view = fetch_view(canonical, Settings(), opener=opener)
+    assert view.pubdate == 1719561600
+
+
+def test_fetch_view_missing_pubdate_is_none():
+    canonical = _canonical()
+    payload = {
+        "code": 0,
+        "data": {
+            "aid": 1,
+            "cid": 555,
+            "title": "Solo",
+            "desc": "d",
+            "duration": 120,
+            "owner": {"mid": 1, "name": "Solo Uploader"},
+            "pages": [],
+        },
+    }
+    opener = _FakeOpener({_view_url(canonical): payload})
+    view = fetch_view(canonical, Settings(), opener=opener)
+    assert view.pubdate is None
+
+
 def test_fetch_view_empty_desc_becomes_none():
     canonical = _canonical()
     payload = {
@@ -213,7 +266,7 @@ def test_fetch_view_raises_view_error_on_malformed_pages_entry():
 
 def test_part_segments_returns_none_on_malformed_view_pages_entry():
     """The same malformed response must degrade `part_segments` to None, not raise."""
-    from bili_tool.player_api import part_segments
+    from harvest.player_api import part_segments
 
     canonical = _canonical(part=1)
     payload = {
@@ -263,7 +316,7 @@ def test_cid_for_part_via_view_data_page_number_match():
 def test_part_segments_returns_none_when_view_missing_aid_and_cid():
     """Malformed view response (missing aid, and a page with cid absent) must degrade to
     None, matching the pre-refactor behavior, not raise a pydantic ValidationError."""
-    from bili_tool.player_api import part_segments
+    from harvest.player_api import part_segments
 
     canonical = _canonical(part=1)
     view_payload = {
@@ -286,7 +339,7 @@ def test_part_segments_returns_none_when_view_missing_aid_and_cid():
 
 def test_part_segments_fetches_view_exactly_once():
     """End-to-end: part_segments must resolve cid via a single fetch_view call, not a raw GET."""
-    from bili_tool.player_api import _API_PLAYER, part_segments
+    from harvest.player_api import _API_PLAYER, part_segments
 
     canonical = _canonical(part=2)
     view_payload = {
@@ -321,7 +374,7 @@ def test_part_segments_fetches_view_exactly_once():
 
 def test_part_segments_accepts_prefetched_view_and_skips_fetch_view():
     """Task 4: when `view` is supplied, part_segments must NOT hit the view endpoint at all."""
-    from bili_tool.player_api import _API_PLAYER, ViewData, ViewPage, part_segments
+    from harvest.player_api import _API_PLAYER, ViewData, ViewPage, part_segments
 
     canonical = _canonical(part=2)
     view = ViewData(

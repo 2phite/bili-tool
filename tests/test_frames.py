@@ -1,4 +1,4 @@
-from bili_tool.frames import dedup_phashes, hamming
+from harvest.frames import dedup_phashes, hamming
 
 
 def test_hamming_identical_is_zero():

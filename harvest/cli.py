@@ -14,23 +14,22 @@ import sys
 from .cache import fs_key, load_json, save_json
 from .config import Settings
 from .merge import build_bundle, write_bundle
-from .parts import part_url, run_parts, select_parts
-from .player_api import ViewData, ViewError, fetch_view
+from .parts import run_parts, select_parts
+from .player_api import ViewError
 from .probe import probe
-from .quality import describe_failure, evaluate
+from .providers.base import select_provider
 from .resolve import Canonical, resolve
 from .schema import Frame, Segment, Transcript
-from .subtitles import extract_info, fetch_subtitle_segments
-from .subtitles import probe as subtitle_probe
 from .transcribe import WHISPER_MODEL, download_audio, transcribe
 
 # NOTE: `probe` here is the metadata pre-flight probe (probe.py), used by the `probe` CLI verb
-# and overridable as `cli.probe` in tests. The SUBTITLE quality probe (subtitles.py) is imported
-# as `subtitle_probe` to avoid the name clash.
+# and overridable as `cli.probe` in tests. Platform-specific subtitle acquisition + the quality
+# gate now live entirely inside each Provider (see harvest/providers/); this module only asks
+# the URL-selected provider for a SubtitleOutcome (decide_transcript below).
 
 
 def parse_args(argv=None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(prog="bili-tool", description=__doc__)
+    p = argparse.ArgumentParser(prog="harvest", description=__doc__)
     sub = p.add_subparsers(dest="command", required=True)
 
     ingest = sub.add_parser("ingest", help="run the full ingest pipeline for a video/part")
@@ -58,6 +57,10 @@ def parse_args(argv=None) -> argparse.Namespace:
     ingest.add_argument(
         "--no-frame-images", action="store_true", help="omit PNGs from out/ (D8)"
     )
+    ingest.add_argument(
+        "--lang", default=None,
+        help="pin transcription language (default: zh for bilibili, auto-detect for YouTube)",
+    )
 
     probe_cmd = sub.add_parser("probe", help="cheap pre-flight metadata probe, no media")
     probe_cmd.add_argument("url")
@@ -82,50 +85,30 @@ def apply_overrides(settings: Settings, args) -> list[str]:
     return warnings
 
 
-def decide_transcript(
-    info: dict, canonical: Canonical, settings: Settings, args, *, view: ViewData | None = None
-) -> Transcript:
-    if args.force_whisper:
-        return _whisper(canonical, settings, args, reason="forced via --force-whisper")
-
-    sub = subtitle_probe(
-        info, canonical, settings,
-        part1_segments=_part1_segments(canonical, settings),
-        view=view,
+def decide_transcript(canonical, meta, settings, args):
+    # The only place a platform name remains: choosing the Whisper-fallback default language.
+    # This is a default, not a control-flow branch — acquisition is fully delegated below.
+    default_lang = args.lang if args.lang else (
+        "zh" if canonical.platform == "bilibili.com" else None
     )
-    if not sub.found:
-        return _whisper(
-            canonical, settings, args, reason=f"no usable subtitle ({sub.reason})"
-        )
+    if args.force_whisper:
+        return _whisper(canonical, settings, args,
+                        reason="forced via --force-whisper", lang=default_lang)
 
-    gate = evaluate(sub.segments, float(info.get("duration") or 0), settings.quality)
-    if gate.passed:
-        return Transcript(
-            source=sub.source,  # type: ignore[arg-type]
-            source_reason=f"{sub.source} (quality-gate: passed)",
-            language="zh",
-            quality_gate=gate,
-            segments=sub.segments,
-        )
-    reason = f"subtitle rejected ({describe_failure(gate, settings.quality)})"
-    return _whisper(canonical, settings, args, reason=reason, gate=gate)
-
-
-def _part1_segments(canonical: Canonical, settings: Settings) -> list[Segment] | None:
-    """D4 tier-2 input: part 1's subtitle for the #6357 identity check. Only fetched for part>1
-    (an extra no-media probe). Best-effort — a failure here just skips tier-2, never aborts."""
-    if canonical.part <= 1:
-        return None
-    try:
-        p1_url = part_url(canonical.url, 1)
-        p1 = Canonical(canonical.platform, canonical.id, 1, p1_url)
-        p1_info = extract_info(p1_url, settings)
-        return fetch_subtitle_segments(p1_info, p1, settings)
-    except Exception:  # noqa: BLE001 - tier-2 is an optional guard, never fatal
-        return None
+    provider = select_provider(canonical.url)
+    outcome = provider.fetch_subtitle(canonical, settings, meta, pinned_lang=args.lang)
+    if outcome is None or not outcome.accepted:
+        reason = outcome.source_reason if outcome else "no usable subtitle"
+        gate = outcome.quality_gate if outcome else None
+        return _whisper(canonical, settings, args, reason=reason, gate=gate, lang=default_lang)
+    return Transcript(
+        source=outcome.source, source_reason=outcome.source_reason,
+        language=outcome.language, quality_gate=outcome.quality_gate,
+        segments=outcome.segments,
+    )
 
 
-def _whisper(canonical, settings, args, *, reason, gate=None) -> Transcript:
+def _whisper(canonical, settings, args, *, reason, gate=None, lang=None) -> Transcript:
     # D6 transcript cache: keyed by identity + the params that change the output.
     key = fs_key(
         canonical.platform, canonical.id, canonical.part,
@@ -143,12 +126,12 @@ def _whisper(canonical, settings, args, *, reason, gate=None) -> Transcript:
         print(f"[{canonical.id} p{canonical.part}] whisper: {reason} -> downloading audio...")
         audio = download_audio(canonical, settings)
         print(f"[{canonical.id} p{canonical.part}] transcribing {audio.name} ({WHISPER_MODEL})...")
-        segments = transcribe(audio, robust=args.robust)
+        segments = transcribe(audio, robust=args.robust, lang=lang)
         save_json(settings.cache_dir, "transcript", key, [s.model_dump() for s in segments])
     return Transcript(
         source="whisper",
         source_reason=reason,
-        language="zh",
+        language=lang,
         model=WHISPER_MODEL,
         robust=args.robust,
         quality_gate=gate,
@@ -157,18 +140,9 @@ def _whisper(canonical, settings, args, *, reason, gate=None) -> Transcript:
 
 
 def process_part(canonical: Canonical, settings: Settings, args) -> None:
-    """Run the single-part pipeline. Fetches `ViewData` at most once (Task 4: one fetch per
-    part) and shares it between `build_bundle` and the subtitle-cid path (`decide_transcript`).
-    `.tv` has no player-API view endpoint yet (deferred), so it stays on the yt-dlp-only path."""
-    view: ViewData | None = None
-    if canonical.platform == "bilibili.com":
-        try:
-            view = fetch_view(canonical, settings)
-        except ViewError:
-            view = None
-
-    info = extract_info(canonical.url, settings)
-    transcript = decide_transcript(info, canonical, settings, args, view=view)
+    provider = select_provider(canonical.url)
+    meta = provider.fetch_metadata(canonical, settings)
+    transcript = decide_transcript(canonical, meta, settings, args)
 
     frames = []
     frame_sources = {}
@@ -184,9 +158,7 @@ def process_part(canonical: Canonical, settings: Settings, args) -> None:
             frames = _caption(canonical, frames, frame_sources, settings)
             vision_model = settings.lmstudio_vision_model
 
-    bundle = build_bundle(
-        canonical, info, transcript, frames, settings, view=view, vision_model=vision_model
-    )
+    bundle = build_bundle(canonical, meta, transcript, frames, settings, vision_model=vision_model)
     out = write_bundle(
         bundle, settings, frame_sources=frame_sources, frame_images=not args.no_frame_images
     )
@@ -248,19 +220,14 @@ def _run_ingest(args) -> int:
         return 1
 
     # Enumerate parts once (cheap, no media), then run the single-part pipeline per selected
-    # part with failure isolation (D12). `view.pages` is the single source of truth for part
-    # count on bilibili.com; bilibili.tv has no player-API view endpoint yet (deferred), so it
-    # falls back to the yt-dlp playlist-entry count.
-    if canonical.platform == "bilibili.com":
-        try:
-            view = fetch_view(canonical, settings)
-            total = max(len(view.pages), 1)
-        except ViewError as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return 1
-    else:
-        info = extract_info(canonical.url, settings)
-        total = len(info.get("entries") or []) or 1
+    # part with failure isolation (D12). bilibili.tv has no player-API view endpoint yet
+    # (deferred), so ingest stays bilibili.com/youtube.com-only, same as probe.
+    if canonical.platform == "bilibili.tv":
+        print("error: ingest is bilibili.com-only; bilibili.tv unsupported (deferred)",
+              file=sys.stderr)
+        return 1
+    provider = select_provider(canonical.url)
+    total = provider.enumerate_parts(canonical, settings)
 
     parts = select_parts(args, canonical, total=total)
     if len(parts) > 1:

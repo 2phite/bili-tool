@@ -18,8 +18,7 @@ from .merge import build_bundle, chunk_boundaries, write_bundle
 from .parts import run_parts, select_parts
 from .player_api import ViewError
 from .probe import probe
-from .providers.base import select_provider
-from .resolve import Canonical, resolve
+from .providers.base import Canonical, select_provider
 from .schema import Frame, Segment, Transcript
 from .transcribe import WHISPER_MODEL, download_audio, transcribe
 
@@ -225,7 +224,7 @@ def _run_probe(args) -> int:
     so `apply_overrides` doesn't apply here."""
     settings = Settings.load()
     try:
-        canonical = resolve(args.url)
+        canonical = select_provider(args.url).resolve(args.url)
         result = probe(canonical, settings)
     except (ViewError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -241,7 +240,7 @@ def _run_ingest(args) -> int:
         print(f"[warn] {w}")
 
     try:
-        canonical = resolve(args.url)
+        canonical = select_provider(args.url).resolve(args.url)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

@@ -117,12 +117,7 @@ def test_no_args_at_all_is_a_system_exit():
 
 def test_probe_path_prints_only_json_to_stdout(monkeypatch, capsys):
     from harvest import cli
-    from harvest.resolve import Canonical
     from harvest.schema import ProbeResult
-
-    monkeypatch.setattr(
-        cli, "resolve", lambda url: Canonical("bilibili.com", "BV1", 1, url)
-    )
 
     def fake_probe(canonical, settings, **kwargs):
         return ProbeResult(
@@ -139,7 +134,7 @@ def test_probe_path_prints_only_json_to_stdout(monkeypatch, capsys):
 
     monkeypatch.setattr(cli, "probe", fake_probe)
 
-    rc = main(["probe", "https://b/video/BV1"])
+    rc = main(["probe", "https://www.bilibili.com/video/BV1"])
     assert rc == 0
 
     captured = capsys.readouterr()
@@ -166,6 +161,48 @@ def test_ingest_malformed_url_exits_nonzero_with_error_on_stderr(capsys):
 
     captured = capsys.readouterr()
     assert captured.err.startswith("error: ")
+
+
+def test_probe_resolves_youtube_url_via_provider_seam(monkeypatch, capsys):
+    """A YouTube URL must resolve through the provider seam, not the bilibili-only resolve()
+    (which raises `not a bilibili URL`). Regression for the CLI never wiring the seam into
+    URL resolution."""
+    from harvest import cli
+    from harvest.schema import ProbeResult
+
+    seen = {}
+
+    def fake_probe(canonical, settings, **kwargs):
+        seen["canonical"] = canonical
+        return ProbeResult(
+            platform="youtube.com", id="F8X9_Dp3ZUk", title="T", uploader="U",
+            uploader_id="UCx", description="d", duration_s=100, parts=1,
+            part_durations_s=[100],
+        )
+
+    monkeypatch.setattr(cli, "probe", fake_probe)
+    rc = main(["probe", "https://www.youtube.com/watch?v=F8X9_Dp3ZUk"])
+    assert rc == 0
+    assert seen["canonical"].platform == "youtube.com"
+    assert seen["canonical"].id == "F8X9_Dp3ZUk"
+    assert json.loads(capsys.readouterr().out)["platform"] == "youtube.com"
+
+
+def test_ingest_resolves_youtube_url_via_provider_seam(monkeypatch):
+    """`ingest` must resolve a YouTube URL through the seam too, then run the single-part
+    pipeline. Regression twin of the probe seam test."""
+    from harvest import cli
+
+    seen = {}
+
+    def fake_process_part(canonical, settings, args):
+        seen["canonical"] = canonical
+
+    monkeypatch.setattr(cli, "process_part", fake_process_part)
+    rc = main(["ingest", "https://www.youtube.com/watch?v=F8X9_Dp3ZUk", "--no-vision"])
+    assert rc == 0
+    assert seen["canonical"].platform == "youtube.com"
+    assert seen["canonical"].id == "F8X9_Dp3ZUk"
 
 
 def test_decide_transcript_youtube_reuses_human_sub_no_quality_gate(monkeypatch):
@@ -284,13 +321,12 @@ def test_decide_transcript_rejected_outcome_falls_back_to_whisper_with_gate(monk
 def test_ingest_enumerates_parts_from_view_pages(monkeypatch):
     """--all-parts on a .com URL must derive its part count from the provider, not yt-dlp."""
     from harvest import cli
-    from harvest.resolve import Canonical
-
-    monkeypatch.setattr(
-        cli, "resolve", lambda url: Canonical("bilibili.com", "BV1", 1, url)
-    )
+    from harvest.providers.base import Canonical
 
     class _FakeP:
+        def resolve(self, url):
+            return Canonical("bilibili.com", "BV1", 1, url)
+
         def enumerate_parts(self, canonical, settings):
             return 3
 
@@ -303,7 +339,7 @@ def test_ingest_enumerates_parts_from_view_pages(monkeypatch):
 
     monkeypatch.setattr(cli, "process_part", fake_process_part)
 
-    rc = main(["ingest", "https://b/video/BV1", "--all-parts", "--no-vision"])
+    rc = main(["ingest", "https://www.bilibili.com/video/BV1", "--all-parts", "--no-vision"])
     assert rc == 0
     assert seen_parts == [1, 2, 3]
 

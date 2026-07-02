@@ -40,6 +40,8 @@ packages = ["harvest"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not live'"
+markers = ["live: hits the network against a real public video (opt in with -m live)"]
 
 [tool.ruff]
 line-length = 99

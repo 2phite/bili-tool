@@ -39,6 +39,7 @@ def ydl_opts(
     skip_download: bool = True,
     referer: str | None = REFERER,
     browser_cookies: bool = True,
+    external_downloader: bool = True,
 ) -> dict:
     """Common yt-dlp options: auth (D9), Referer (§7, scoped to bilibili by default — YouTube
     callers pass referer=None so bilibili's Referer is never sent on YouTube requests), ffmpeg
@@ -47,7 +48,12 @@ def ydl_opts(
     `browser_cookies=False` omits the `cookiesfrombrowser` jar (issue #1): YouTube extraction
     breaks ("Requested format is not available") when a logged-in browser session is attached,
     so YouTube callers opt out unless the user opts in via HARVEST_YT_COOKIES. bilibili keeps
-    the jar (its default, cookies effectively required)."""
+    the jar (its default, cookies effectively required).
+
+    `external_downloader=False` keeps aria2c out of the media download (issue #3): aria2c's
+    parallel connections are a throttled-bilibili-CDN optimization; YouTube throttles them to a
+    crawl and aria2c bypasses yt-dlp's n-signature handling, so downloads stall or "succeed"
+    without writing a file. Non-bilibili media callers pass False to use the native downloader."""
     headers: dict = {}
     if referer:
         headers["Referer"] = referer
@@ -62,7 +68,7 @@ def ydl_opts(
         "fragment_retries": 10,
         "continuedl": True,
     }
-    if settings.aria2c_path:
+    if external_downloader and settings.aria2c_path:
         # aria2c saturates throttled bilibili CDNs with parallel connections + robust resume.
         opts["external_downloader"] = {"default": settings.aria2c_path}
         opts["external_downloader_args"] = {

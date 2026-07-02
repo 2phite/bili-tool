@@ -35,16 +35,47 @@ def download_audio(canonical: Canonical, settings: Settings) -> Path:
     # YouTube media download hits the same cookie trap as extraction (issue #1): a logged-in
     # browser session breaks yt-dlp's format selection. Cookie-free unless opted in.
     browser_cookies = is_bilibili or settings.youtube_cookies
-    opts = ydl_opts(settings, skip_download=False, referer=referer, browser_cookies=browser_cookies)
+    # aria2c is a throttled-bilibili-CDN optimization (issue #3): on YouTube its parallel
+    # connections get throttled to a crawl and it bypasses yt-dlp's n-signature handling, so
+    # downloads stall or "succeed" without writing a file. Native downloader off bilibili.
+    opts = ydl_opts(
+        settings,
+        skip_download=False,
+        referer=referer,
+        browser_cookies=browser_cookies,
+        external_downloader=is_bilibili,
+    )
     opts.update({"format": "bestaudio/best", "outtmpl": str(audio_dir / f"{key}.%(ext)s")})
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(canonical.url, download=True)
 
+    return _resolve_audio_path(info, audio_dir, key)
+
+
+def _resolve_audio_path(info: dict, audio_dir: Path, key: str) -> Path:
+    """Recover the downloaded audio file from yt-dlp's info dict, else the on-disk glob.
+
+    yt-dlp's `requested_downloads[0]["filepath"]` is the happy path but is inconsistently present
+    (issue #3), so we also try the top-level `filepath` and the entry's `_filename`/`filename`
+    before globbing the cache. If nothing resolves to a real file the download silently produced
+    none — fail loud with the expected pattern and yt-dlp's info keys instead of a bare
+    StopIteration from an exhausted `next()`."""
     rd = (info.get("requested_downloads") or [{}])[0]
-    fp = rd.get("filepath")
-    if fp:
-        return Path(fp)
-    return next(p for p in audio_dir.glob(f"{key}.*") if p.suffix != ".part")
+    keys = ("filepath", "_filename", "filename")
+    for cand in (info.get("filepath"), *(rd.get(k) for k in keys)):
+        if cand and Path(cand).exists():
+            return Path(cand)
+    matches = [p for p in audio_dir.glob(f"{key}.*") if p.suffix != ".part"]
+    if matches:
+        return matches[0]
+    listing = sorted(p.name for p in audio_dir.iterdir()) if audio_dir.exists() else []
+    raise RuntimeError(
+        f"audio download completed but no file was found for {key!r}. "
+        f"Expected {audio_dir / (key + '.*')} (excluding .part), "
+        f"but audio dir contains: {listing}. "
+        f"yt-dlp info keys: {sorted(info.keys())}; "
+        f"requested_downloads[0] keys: {sorted(rd.keys())}."
+    )
 
 
 def _register_cuda_dlls() -> None:

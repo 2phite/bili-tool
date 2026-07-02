@@ -86,7 +86,24 @@ class YouTubeProvider:
 
     def _extract_info(self, canonical: Canonical, settings: Settings) -> dict:
         with yt_dlp.YoutubeDL(self._ydl_opts(settings)) as ydl:
-            return ydl.extract_info(canonical.url, download=False)
+            info = ydl.extract_info(canonical.url, download=False)
+        self._guard_degraded(info, canonical, settings)
+        return info
+
+    @staticmethod
+    def _guard_degraded(info: dict, canonical: Canonical, settings: Settings) -> None:
+        """Fail loud on a degraded/blocked YouTube response (issue #5) instead of letting a corrupt
+        bundle get written. Every real video reports a duration; a stripped response (bot check /
+        no working JS runtime, seen as a placeholder title like "recommended") omits it."""
+        if info.get("duration"):
+            return
+        runtime = settings.js_runtime[0] if settings.js_runtime else "none"
+        raise RuntimeError(
+            f"degraded YouTube extraction for {canonical.id!r}: no duration in the response "
+            f"(title={info.get('title')!r}). yt-dlp likely got a bot-check/stripped page because "
+            f"its YouTube JS challenge could not be solved (js_runtime={runtime}). "
+            f"Install deno (https://deno.land) so yt-dlp can use the real web player client."
+        )
 
     def fetch_metadata(self, canonical, settings, *, info=None) -> SourceMetadata:
         info = info if info is not None else self._extract_info(canonical, settings)

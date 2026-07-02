@@ -31,6 +31,21 @@ def test_ydl_opts_browser_cookies_false_omits_cookie_jar():
     assert "cookiesfrombrowser" not in opts
 
 
+def test_ydl_opts_wires_detected_js_runtime():
+    # issue #5: a detected JS runtime is handed to yt-dlp so it uses YouTube's real web player
+    # client instead of degrading to a stripped/blocked response.
+    s = Settings()
+    s.js_runtime = ("deno", "C:/Users/x/.deno/bin/deno.exe")
+    opts = ydl_opts(s)
+    assert opts["js_runtimes"] == {"deno": {"path": "C:/Users/x/.deno/bin/deno.exe"}}
+
+
+def test_ydl_opts_omits_js_runtimes_when_none():
+    s = Settings()
+    s.js_runtime = None
+    assert "js_runtimes" not in ydl_opts(s)
+
+
 def test_is_part1_duplicate_identical_text():
     a = _segs(["第一句。", "第二句。", "第三句。"])
     b = _segs(["第一句。", "第二句。", "第三句。"])

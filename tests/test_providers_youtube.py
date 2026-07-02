@@ -143,3 +143,45 @@ def test_fetch_subtitle_never_consults_automatic_captions():
     got = p.fetch_subtitle(_canonical(), Settings(), _meta_for(info),
                            info=info, fetch_url=lambda url, settings: "SHOULD NOT BE CALLED")
     assert got is None
+
+
+# --- issue #5: fail-loud guard against a degraded extraction ------------------------------------
+
+
+import types  # noqa: E402
+
+import pytest  # noqa: E402
+
+import harvest.providers.youtube as youtube_mod  # noqa: E402
+
+
+def _fake_yt_dlp(monkeypatch, info):
+    class _FakeYDL:
+        def __init__(self, opts):
+            ...
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download):
+            return info
+
+    monkeypatch.setattr(youtube_mod, "yt_dlp", types.SimpleNamespace(YoutubeDL=_FakeYDL))
+
+
+def test_extract_info_raises_on_degraded_response(monkeypatch):
+    # A blocked/degraded YouTube response (placeholder title, no duration) must fail loud instead
+    # of flowing into a corrupt bundle. Missing `duration` is the signal.
+    _fake_yt_dlp(monkeypatch, {"title": "recommended", "id": "F8X9_Dp3ZUk"})
+    with pytest.raises(RuntimeError) as ei:
+        YouTubeProvider()._extract_info(_canonical("F8X9_Dp3ZUk"), Settings())
+    assert "F8X9_Dp3ZUk" in str(ei.value)
+
+
+def test_extract_info_returns_healthy_response(monkeypatch):
+    healthy = {"title": "Real Lecture", "duration": 3895, "id": "F8X9_Dp3ZUk"}
+    _fake_yt_dlp(monkeypatch, healthy)
+    assert YouTubeProvider()._extract_info(_canonical("F8X9_Dp3ZUk"), Settings()) == healthy

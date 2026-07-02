@@ -89,6 +89,12 @@ def ydl_opts(
         from pathlib import Path
 
         opts["ffmpeg_location"] = str(Path(settings.ffmpeg_path).parent)
+    if settings.js_runtime:
+        # A JS runtime lets yt-dlp use YouTube's real web player client (issue #5); without one,
+        # extraction intermittently degrades to a stripped response. Harmless for bilibili — the
+        # runtime is only exercised when a challenge actually needs solving.
+        name, path = settings.js_runtime
+        opts["js_runtimes"] = {name: {"path": path}}
     return opts
 
 

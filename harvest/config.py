@@ -49,6 +49,45 @@ def find_aria2c() -> str | None:
     return None
 
 
+def _winget_glob(pattern: str) -> str | None:
+    local = os.environ.get("LOCALAPPDATA", "")
+    if not local:
+        return None
+    pkgs = Path(local) / "Microsoft" / "WinGet" / "Packages"
+    return next((str(exe) for exe in pkgs.glob(pattern)), None)
+
+
+def find_js_runtime() -> tuple[str, str] | None:
+    """Locate a JavaScript runtime for yt-dlp (issue #5). yt-dlp needs one to drive YouTube's real
+    web player client; without it extraction intermittently degrades to a stripped/blocked
+    response (placeholder title, no duration/subtitles). Returns (name, path) or None.
+
+    deno is preferred (yt-dlp's default-priority runtime); node is a working fallback. Each is
+    looked up on PATH first, then in its out-of-band install location, since neither the deno.land
+    scripted installer nor winget necessarily touches this process's PATH."""
+    exe = ".exe" if os.name == "nt" else ""
+
+    deno = shutil.which("deno")
+    if deno:
+        return ("deno", deno)
+    # deno.land installer: $DENO_INSTALL (default ~/.deno), binary at bin/deno[.exe].
+    deno_root = os.environ.get("DENO_INSTALL") or str(Path.home() / ".deno")
+    deno_exe = Path(deno_root) / "bin" / f"deno{exe}"
+    if deno_exe.exists():
+        return ("deno", str(deno_exe))
+    winget_deno = _winget_glob("DenoLand.Deno*/**/deno.exe")
+    if winget_deno:
+        return ("deno", winget_deno)
+
+    node = shutil.which("node")
+    if node:
+        return ("node", node)
+    winget_node = _winget_glob("OpenJS.NodeJS*/**/node.exe")
+    if winget_node:
+        return ("node", winget_node)
+    return None
+
+
 @dataclass
 class QualityThresholds:
     """D5 starting guesses — any single metric tripping falls back to Whisper. Calibrate step 3."""
@@ -82,6 +121,7 @@ class Settings:
     out_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "out")
     ffmpeg_path: str | None = None
     aria2c_path: str | None = None
+    js_runtime: tuple[str, str] | None = None  # (name, path) for yt-dlp, issue #5
 
     # frames (D3/D6) — defaults are guesses, tuned step 4
     sample_interval_s: float = 6.0  # periodic frame sampling cadence (slide-deck recordings)
@@ -118,4 +158,5 @@ class Settings:
             s.out_dir = Path(os.environ["HARVEST_OUT_DIR"])
         s.ffmpeg_path = find_ffmpeg()
         s.aria2c_path = find_aria2c()
+        s.js_runtime = find_js_runtime()
         return s

@@ -23,6 +23,12 @@ still needs careful original-language caption handling. harvest encapsulates eac
 
 - **Python 3.11**
 - **ffmpeg** on PATH (or auto-detected from a winget install) — used by yt-dlp and the frame stage.
+- **A JavaScript runtime** (**deno** recommended, or node) for **YouTube** — yt-dlp needs one to
+  drive YouTube's real web player client; without it extraction intermittently degrades to a
+  stripped/blocked response (wrong title, no subtitles). Auto-detected from PATH, a `deno.land`
+  install (`~/.deno`, via `irm https://deno.land/install.ps1 | iex`), or winget. Note: the
+  separate `nsig` challenge solver (EJS) is optional and not required — audio, subtitles, and
+  metadata come through without it. Not needed for bilibili.
 - An **NVIDIA GPU** (CUDA) for faster-whisper. CPU works but is slow.
 - **LM Studio** running with a VL model **and its mmproj projector loaded** (verified at runtime via
   a nonce-OCR probe) for the vision stage.

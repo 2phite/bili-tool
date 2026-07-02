@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from harvest.config import Settings
+import harvest.config as config
+from harvest.config import Settings, find_js_runtime
 
 
 def test_load_reads_harvest_env_keys(monkeypatch, tmp_path):
@@ -27,3 +28,44 @@ def test_youtube_cookies_opt_in_via_env(monkeypatch):
         assert Settings.load().youtube_cookies is True, val
     monkeypatch.setenv("HARVEST_YT_COOKIES", "0")
     assert Settings.load().youtube_cookies is False
+
+
+# --- issue #5: JS runtime detection ------------------------------------------------------------
+
+
+def _no_winget(monkeypatch):
+    # Neutralize the winget glob fallback so tests only exercise the intended path.
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+
+
+def test_find_js_runtime_prefers_deno_on_path(monkeypatch):
+    found = {"deno": "X/deno", "node": "X/node"}
+    monkeypatch.setattr(config.shutil, "which", lambda n: found.get(n))
+    assert find_js_runtime() == ("deno", "X/deno")
+
+
+def test_find_js_runtime_falls_back_to_node(monkeypatch, tmp_path):
+    monkeypatch.setattr(config.shutil, "which", lambda n: "X/node" if n == "node" else None)
+    monkeypatch.setenv("DENO_INSTALL", str(tmp_path / "empty"))  # no bin/deno.exe here
+    _no_winget(monkeypatch)
+    assert find_js_runtime() == ("node", "X/node")
+
+
+def test_find_js_runtime_finds_deno_via_scripted_install_dir(monkeypatch, tmp_path):
+    # The deno.land installer drops deno.exe in ~/.deno/bin and touches neither this process's
+    # PATH nor winget, so the explicit install dir is the only way to find it.
+    deno_root = tmp_path / ".deno"
+    (deno_root / "bin").mkdir(parents=True)
+    exe = deno_root / "bin" / "deno.exe"
+    exe.write_text("")
+    monkeypatch.setattr(config.shutil, "which", lambda n: None)
+    monkeypatch.setenv("DENO_INSTALL", str(deno_root))
+    _no_winget(monkeypatch)
+    assert find_js_runtime() == ("deno", str(exe))
+
+
+def test_find_js_runtime_none_when_absent(monkeypatch, tmp_path):
+    monkeypatch.setattr(config.shutil, "which", lambda n: None)
+    monkeypatch.setenv("DENO_INSTALL", str(tmp_path / "empty"))
+    _no_winget(monkeypatch)
+    assert find_js_runtime() is None

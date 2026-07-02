@@ -9,7 +9,8 @@ from tests.test_player_api import _FakeOpener, _view_url
 
 
 def _canonical(platform: str = "bilibili.com", part: int = 1) -> Canonical:
-    return Canonical(platform, "BV1", part, f"https://b/video/BV1?p={part}")
+    host = "www.bilibili.com" if platform == "bilibili.com" else "www.bilibili.tv"
+    return Canonical(platform, "BV1", part, f"https://{host}/video/BV1?p={part}")
 
 
 def test_probe_maps_full_fixture_to_probe_result():
@@ -119,3 +120,34 @@ def test_probe_result_uses_uploader_id_string():
     r = ProbeResult(platform="youtube.com", id="x", uploader_id="UCabc", parts=1)
     assert r.uploader_id == "UCabc"
     assert not hasattr(r, "uploader_mid")
+
+
+def test_probe_youtube_delegates_to_provider(monkeypatch):
+    import sys
+
+    import harvest  # noqa: F401  ensure harvest.probe submodule is registered in sys.modules
+
+    from harvest.providers.base import Canonical, SourceMetadata
+
+    # NOTE: `harvest/__init__.py` does `from .probe import probe`, which shadows the
+    # `harvest.probe` *submodule* with the `probe` *function* as a package attribute. So
+    # `from harvest import probe` gets the function, not the module. Go via sys.modules to
+    # reach the real module object for monkeypatching `select_provider`.
+    probe_mod = sys.modules["harvest.probe"]
+    from harvest.schema import ProbeResult
+
+    canonical = Canonical("youtube.com", "dQw4w9WgXcQ", 1, "https://youtu.be/dQw4w9WgXcQ")
+
+    class _FakeYT:
+        def fetch_metadata(self, c, settings):
+            return SourceMetadata(
+                platform="youtube.com", id="dQw4w9WgXcQ", title="T", uploader="C",
+                uploader_id="UCx", description="d", duration_s=100,
+                published_at="2009-10-25T06:57:33Z", parts=1, part_durations_s=[100])
+
+    monkeypatch.setattr(probe_mod, "select_provider", lambda url: _FakeYT())
+    result = probe_mod.probe(canonical, Settings())
+    assert isinstance(result, ProbeResult)
+    assert result.platform == "youtube.com"
+    assert result.uploader_id == "UCx"
+    assert result.published_at.endswith("Z")

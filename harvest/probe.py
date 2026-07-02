@@ -1,37 +1,32 @@
-"""Public pre-flight: cheap metadata probe ahead of the full pipeline.
-
-Atlas calls `probe()` to estimate workload (title/duration/parts/per-part durations) before
-committing to the full harvest run. Maps `fetch_view`'s `ViewData` onto the stable
-`ProbeResult` schema (SPEC: downstream-facing contract, schema.py).
-
-bilibili.tv is deferred (no player-API view endpoint wired yet) - guarded out before any HTTP.
-"""
+"""Public pre-flight metadata probe. Delegates to the URL-selected provider's fetch_metadata
+-> SourceMetadata, then maps that normalized shape onto the stable ProbeResult schema. No
+platform branches (SPEC §4.1)."""
 
 from __future__ import annotations
 
 from .config import Settings
-from .player_api import fetch_view, published_at_iso
-from .resolve import Canonical
+from .providers.base import Canonical, select_provider
 from .schema import ProbeResult
 
 
 def probe(canonical: Canonical, settings: Settings, *, opener=None) -> ProbeResult:
-    """Fetch + map view metadata into a `ProbeResult`. bilibili.com-only; raises `ValueError`
-    for bilibili.tv before any HTTP. Propagates `ViewError` from `fetch_view` (fails loud)."""
-    if canonical.platform != "bilibili.com":
+    if canonical.platform == "bilibili.tv":
         raise ValueError("probe is bilibili.com-only; bilibili.tv unsupported (deferred)")
 
-    view = fetch_view(canonical, settings, opener=opener)
-
+    provider = select_provider(canonical.url)
+    if opener is not None:
+        meta = provider.fetch_metadata(canonical, settings, opener=opener)
+    else:
+        meta = provider.fetch_metadata(canonical, settings)
     return ProbeResult(
-        platform=canonical.platform,
-        id=canonical.id,
-        title=view.title,
-        uploader=view.owner_name,
-        uploader_id=str(view.owner_mid) if view.owner_mid is not None else None,
-        description=view.desc,
-        duration_s=view.duration,
-        published_at=published_at_iso(view.pubdate),
-        parts=max(len(view.pages), 1),
-        part_durations_s=[p.duration for p in view.pages],
+        platform=meta.platform,
+        id=meta.id,
+        title=meta.title,
+        uploader=meta.uploader,
+        uploader_id=meta.uploader_id,
+        description=meta.description,
+        duration_s=meta.duration_s,
+        published_at=meta.published_at,
+        parts=meta.parts,
+        part_durations_s=meta.part_durations_s,
     )

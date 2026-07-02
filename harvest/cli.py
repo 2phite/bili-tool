@@ -168,13 +168,19 @@ def process_part(canonical: Canonical, settings: Settings, args) -> None:
         if not hasattr(provider, "fetch_danmaku"):
             print(f"[{canonical.id} p{canonical.part}] --danmaku ignored: "
                   f"not supported on {canonical.platform}")
+        elif not settings.lmstudio_danmaku_model:
+            print(f"[{canonical.id} p{canonical.part}] --danmaku ignored: "
+                  f"HARVEST_DANMAKU_MODEL not set")
         else:
             fetch = provider.fetch_danmaku(canonical, settings)
             boundaries = chunk_boundaries(
                 transcript.segments, frames,
                 window_s=settings.chunk_window_s, duration_s=meta.duration_s,
             )
-            danmaku = represent_danmaku(canonical, fetch, settings, boundaries=boundaries)
+            danmaku = represent_danmaku(
+                canonical, fetch, settings, boundaries=boundaries,
+                duration_s=meta.duration_s, window_s=settings.chunk_window_s,
+            )
 
     bundle = build_bundle(
         canonical, meta, transcript, frames, settings,

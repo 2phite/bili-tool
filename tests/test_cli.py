@@ -375,8 +375,12 @@ def _danmaku_setup(monkeypatch, *, provider, danmaku_result=None):
     monkeypatch.setattr(cli, "build_bundle", fake_build)
     monkeypatch.setattr(cli, "write_bundle", lambda *a, **k: "out/path")
 
-    def fake_represent(canonical, fetch, settings, *, boundaries=None, **kwargs):
-        calls["represent_danmaku"] = {"fetch": fetch, "boundaries": boundaries}
+    def fake_represent(canonical, fetch, settings, *, boundaries=None, duration_s=None,
+                       window_s=None, **kwargs):
+        calls["represent_danmaku"] = {
+            "fetch": fetch, "boundaries": boundaries,
+            "duration_s": duration_s, "window_s": window_s,
+        }
         return danmaku_result
 
     monkeypatch.setattr(cli, "represent_danmaku", fake_represent)
@@ -405,11 +409,15 @@ def test_process_part_danmaku_flag_on_bilibili_populates_bundle_and_passes_bound
     calls = _danmaku_setup(monkeypatch, provider=_FakeBili(), danmaku_result=danmaku_result)
 
     from harvest import cli
+    settings = _settings()
+    settings.lmstudio_danmaku_model = "test-danmaku-model"
     args = parse_args(["ingest", "https://www.bilibili.com/video/BV1", "--danmaku", "--no-vision"])
-    cli.process_part(canonical, _settings(), args)
+    cli.process_part(canonical, settings, args)
 
     assert calls["represent_danmaku"]["fetch"] is fetch_sentinel
     assert calls["represent_danmaku"]["boundaries"] == [0.0, 75.0]  # fixed window, no frames
+    assert calls["represent_danmaku"]["duration_s"] == 100  # meta.duration_s, not omitted
+    assert calls["represent_danmaku"]["window_s"] == settings.chunk_window_s
     assert calls["build_danmaku"] is danmaku_result
 
 
@@ -438,6 +446,37 @@ def test_process_part_danmaku_flag_on_youtube_warns_and_stays_none(monkeypatch, 
     captured = capsys.readouterr()
     assert "--danmaku ignored" in captured.out
     assert "not supported on youtube.com" in captured.out
+
+
+def test_process_part_danmaku_flag_without_model_configured_warns_and_skips(monkeypatch, capsys):
+    from harvest.providers.base import SourceMetadata
+    from harvest.resolve import Canonical
+
+    canonical = Canonical("bilibili.com", "BV1", 1, "https://www.bilibili.com/video/BV1")
+    meta = SourceMetadata(platform="bilibili.com", id="BV1", title="t", uploader=None,
+                          uploader_id=None, description=None, duration_s=100,
+                          published_at=None, parts=1, part_durations_s=[100])
+
+    class _FakeBili:
+        def fetch_metadata(self, c, settings):
+            return meta
+
+        def fetch_danmaku(self, c, settings):
+            raise AssertionError("fetch_danmaku must not be called when the danmaku model is unset")
+
+    calls = _danmaku_setup(monkeypatch, provider=_FakeBili())
+
+    from harvest import cli
+    settings = _settings()
+    assert settings.lmstudio_danmaku_model == ""  # unset by default -- the case under test
+    args = parse_args(["ingest", "https://www.bilibili.com/video/BV1", "--danmaku", "--no-vision"])
+    cli.process_part(canonical, settings, args)
+
+    assert calls["represent_danmaku"] is None  # never called
+    assert calls["build_danmaku"] is None       # Bundle.danmaku stays null
+    captured = capsys.readouterr()
+    assert "--danmaku ignored" in captured.out
+    assert "HARVEST_DANMAKU_MODEL not set" in captured.out
 
 
 def test_process_part_without_danmaku_flag_leaves_bundle_danmaku_none_and_skips_represent(monkeypatch):

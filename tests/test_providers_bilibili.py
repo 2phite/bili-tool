@@ -15,6 +15,14 @@ def test_matches_bilibili_com_and_short_link():
     assert not p.matches("https://www.youtube.com/watch?v=x")
 
 
+def test_auth_opts_still_carries_bilibili_referer():
+    from harvest.config import REFERER
+
+    p = BilibiliProvider()
+    opts = p.auth_opts(Settings())
+    assert opts["http_headers"]["Referer"] == REFERER
+
+
 def test_resolve_delegates_to_resolve():
     p = BilibiliProvider()
     c = p.resolve("https://www.bilibili.com/video/BV1xx411x7xx?p=2")
@@ -38,6 +46,17 @@ def test_fetch_metadata_maps_view_to_source_metadata():
     assert meta.published_at == "2024-06-28T16:00:00+08:00"
     assert meta.parts == 2
     assert meta.part_durations_s == [300, 300]
+
+
+def test_fetch_metadata_uses_canonical_platform_for_bilibili_tv():
+    p = BilibiliProvider()
+    canonical = Canonical("bilibili.tv", "BV1", 1, "https://b/video/BV1?p=1")
+    payload = {"code": 0, "data": {
+        "aid": 1, "cid": 5, "title": "S", "desc": "",
+        "duration": 120, "owner": {"mid": 1, "name": "U"}, "pages": []}}
+    opener = _FakeOpener({_view_url(canonical): payload})
+    meta = p.fetch_metadata(canonical, Settings(), opener=opener)
+    assert meta.platform == "bilibili.tv"
 
 
 def test_enumerate_parts_counts_view_pages():

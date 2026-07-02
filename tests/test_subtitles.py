@@ -1,10 +1,21 @@
+from harvest.config import REFERER, Settings
 from harvest.resolve import Canonical
 from harvest.schema import Segment
-from harvest.subtitles import SubtitleResult, is_part1_duplicate, probe
+from harvest.subtitles import SubtitleResult, is_part1_duplicate, probe, ydl_opts
 
 
 def _segs(texts):
     return [Segment(start=i * 4.0, end=(i + 1) * 4.0, text=t) for i, t in enumerate(texts)]
+
+
+def test_ydl_opts_default_includes_bilibili_referer():
+    opts = ydl_opts(Settings())
+    assert opts["http_headers"]["Referer"] == REFERER
+
+
+def test_ydl_opts_referer_none_omits_referer_header():
+    opts = ydl_opts(Settings(), referer=None)
+    assert "Referer" not in opts["http_headers"]
 
 
 def test_is_part1_duplicate_identical_text():

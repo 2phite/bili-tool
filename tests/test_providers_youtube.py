@@ -31,6 +31,12 @@ def test_resolve_extracts_11_char_id_part_always_1():
     assert p.resolve("https://youtu.be/dQw4w9WgXcQ").id == "dQw4w9WgXcQ"
 
 
+def test_auth_opts_has_no_referer_header():
+    p = YouTubeProvider()
+    opts = p.auth_opts(Settings())
+    assert "Referer" not in opts["http_headers"]
+
+
 def test_metadata_from_info_maps_fields_and_utc_published_at():
     p = YouTubeProvider()
     meta = p._metadata_from_info(_info("dQw4w9WgXcQ"))

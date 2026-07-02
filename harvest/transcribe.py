@@ -12,7 +12,7 @@ from pathlib import Path
 import yt_dlp
 
 from .cache import fs_key
-from .config import Settings
+from .config import REFERER, Settings
 from .resolve import Canonical
 from .schema import Segment
 from .subtitles import ydl_opts
@@ -30,7 +30,8 @@ def download_audio(canonical: Canonical, settings: Settings) -> Path:
     if existing:
         return existing[0]
 
-    opts = ydl_opts(settings, skip_download=False)
+    referer = REFERER if canonical.platform == "bilibili.com" else None
+    opts = ydl_opts(settings, skip_download=False, referer=referer)
     opts.update({"format": "bestaudio/best", "outtmpl": str(audio_dir / f"{key}.%(ext)s")})
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(canonical.url, download=True)

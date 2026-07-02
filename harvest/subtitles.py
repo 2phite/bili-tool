@@ -33,9 +33,13 @@ class SubtitleResult:
     last_cue_end: float | None = None
 
 
-def ydl_opts(settings: Settings, *, skip_download: bool = True) -> dict:
-    """Common yt-dlp options: auth (D9), Referer (§7), ffmpeg location."""
-    headers = {"Referer": REFERER}
+def ydl_opts(settings: Settings, *, skip_download: bool = True, referer: str | None = REFERER) -> dict:
+    """Common yt-dlp options: auth (D9), Referer (§7, scoped to bilibili by default — YouTube
+    callers pass referer=None so bilibili's Referer is never sent on YouTube requests), ffmpeg
+    location."""
+    headers: dict = {}
+    if referer:
+        headers["Referer"] = referer
     opts: dict = {
         "skip_download": skip_download,
         "quiet": True,

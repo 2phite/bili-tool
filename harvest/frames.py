@@ -14,7 +14,7 @@ from typing import Sequence
 import yt_dlp
 
 from .cache import fs_key
-from .config import Settings
+from .config import REFERER, Settings
 from .schema import Frame
 from .subtitles import ydl_opts
 
@@ -48,7 +48,8 @@ def download_video(canonical, settings: Settings) -> Path:
     if existing:
         return existing[0]
 
-    opts = ydl_opts(settings, skip_download=False)
+    referer = REFERER if canonical.platform == "bilibili.com" else None
+    opts = ydl_opts(settings, skip_download=False, referer=referer)
     opts.update(
         {
             # Video-only (no audio): frames don't need sound, and skipping the mux avoids the

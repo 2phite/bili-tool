@@ -38,7 +38,7 @@ class BilibiliProvider:
     def fetch_metadata(self, canonical, settings, *, opener=None) -> SourceMetadata:
         view = fetch_view(canonical, settings, opener=opener)
         return SourceMetadata(
-            platform="bilibili.com",
+            platform=canonical.platform,
             id=canonical.id,
             title=view.title,
             uploader=view.owner_name,

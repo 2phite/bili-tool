@@ -118,6 +118,31 @@ def test_fetch_subtitle_rejects_when_gate_fails_and_carries_gate(monkeypatch):
     assert out.quality_gate is failed and "rejected" in out.source_reason
 
 
+def test_fetch_danmaku_delegates_to_player_api(monkeypatch):
+    """BilibiliProvider.fetch_danmaku is a thin delegation to player_api.fetch_danmaku."""
+    from harvest.player_api import DanmakuFetch
+    from harvest.providers import bilibili as biliprov
+
+    p = BilibiliProvider()
+    canonical = _canonical()
+    sentinel = DanmakuFetch(source_total=5, fetched_total=5, sampled=False, records=[])
+    captured = {}
+
+    def _fake_fetch_danmaku(c, s, *, opener=None, view=None):
+        captured["canonical"] = c
+        captured["opener"] = opener
+        captured["view"] = view
+        return sentinel
+
+    monkeypatch.setattr(biliprov, "fetch_danmaku", _fake_fetch_danmaku)
+    result = p.fetch_danmaku(canonical, Settings(), opener="fake-opener", view="fake-view")
+
+    assert result is sentinel
+    assert captured["canonical"] is canonical
+    assert captured["opener"] == "fake-opener"
+    assert captured["view"] == "fake-view"
+
+
 def test_fetch_subtitle_rejected_when_probe_not_found_no_gate(monkeypatch):
     from harvest.providers import bilibili as biliprov
     from harvest.subtitles import SubtitleResult

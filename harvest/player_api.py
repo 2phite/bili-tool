@@ -12,8 +12,12 @@ We only want the original zh transcription; translations are ignored.
 
 from __future__ import annotations
 
+import gzip
 import json
 import urllib.request
+import xml.etree.ElementTree as ET
+import zlib
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 import yt_dlp
@@ -224,3 +228,106 @@ def part_segments(
         return None
     # language key (provenance set to "auto-sub" by subtitles._acquire)
     return (pick.get("lan") or "ai-zh"), segments
+
+
+# --- danmaku acquisition (Task 2): the server-sampled XML endpoint, MVP scope. The protobuf
+# seg.so census endpoint is deferred (see task brief) -- `sampled` lets Task 3's schema tell the
+# difference once that lands. ---
+
+_API_DANMAKU_XML = "https://comment.bilibili.com/{cid}.xml"
+
+
+@dataclass(frozen=True)
+class RawDanmaku:
+    """One `<d>` element, stripped to the fields the acquisition contract keeps: `content_ts`
+    (seconds into the video the comment is pinned to) + its text. `mode`/`post_unix`/`post_iso`
+    and the rest of the `p=` attribute are deliberately dropped (descoped, see task brief)."""
+
+    content_ts: float
+    text: str
+
+
+@dataclass(frozen=True)
+class DanmakuFetch:
+    """Result of a danmaku acquisition attempt: `source_total` is bilibili's platform-reported
+    count (`ViewData.danmaku_count`, may be `None` if unavailable), `fetched_total` is how many
+    records this fetch actually got (`len(records)`), and `sampled` is `True` when the XML
+    endpoint's server-side cap means `fetched_total` undercounts `source_total`."""
+
+    source_total: int | None
+    fetched_total: int
+    sampled: bool
+    records: list[RawDanmaku]
+
+
+def _decode(body: bytes) -> str:
+    """comment.bilibili.com/{cid}.xml is served deflate/gzip-compressed; urllib won't unwrap it.
+    Lifted verbatim from the proven `scratch/dump_danmaku.py` probe."""
+    for attempt in (
+        lambda b: b.decode("utf-8"),                # already plain
+        lambda b: gzip.decompress(b).decode("utf-8"),
+        lambda b: zlib.decompress(b, -zlib.MAX_WBITS).decode("utf-8"),  # raw deflate
+        lambda b: zlib.decompress(b).decode("utf-8"),                   # zlib-wrapped
+    ):
+        try:
+            return attempt(body)
+        except Exception:  # noqa: BLE001 - try the next codec
+            continue
+    raise ValueError("could not decode danmaku response (unknown encoding)")
+
+
+def _parse_danmaku_xml(raw: str) -> list[RawDanmaku]:
+    """Parse `<d p="content_ts,mode,fontsize,color,post_unix,pool,userhash,dmid">text</d>`
+    elements, keeping only `content_ts` (field 0) + text. Skips malformed `<d>` (fewer than 5
+    comma fields -- the minimum needed to trust field 0). Sorted ascending by `content_ts`
+    (chronological order is load-bearing for Task 3's windowing)."""
+    root = ET.fromstring(raw)
+    out: list[RawDanmaku] = []
+    for d in root.findall("d"):
+        p = (d.get("p") or "").split(",")
+        if len(p) < 5:
+            continue
+        try:
+            content_ts = float(p[0])
+        except ValueError:
+            continue
+        out.append(RawDanmaku(content_ts=content_ts, text=d.text or ""))
+    out.sort(key=lambda r: r.content_ts)
+    return out
+
+
+def fetch_danmaku(
+    canonical: Canonical, settings: Settings, *, opener=None, view: ViewData | None = None
+) -> DanmakuFetch:
+    """Fetch + parse the raw danmaku stream for this part via the server-sampled XML endpoint.
+
+    Always returns a `DanmakuFetch`, never raises or returns `None`: when no cid resolves for
+    the part (or the view itself is unavailable/`ViewError`s), returns an empty result --
+    `records=[]`, `fetched_total=0`, `sampled=False`, `source_total` carried over from `view`
+    when one was available. This mirrors `part_segments`'s "absence degrades gracefully" stance,
+    adapted to a non-Optional return type since `DanmakuFetch` already has a natural empty state.
+
+    `opener` is injectable for tests; production builds one carrying the live cookies. `view`
+    lets a caller that already fetched `ViewData` (Task 4: one fetch per part) share it instead
+    of triggering a second `web-interface/view` GET.
+    """
+    op = opener or _opener(settings)
+
+    if view is None:
+        try:
+            view = fetch_view(canonical, settings, opener=op)
+        except ViewError:
+            view = None
+
+    source_total = view.danmaku_count if view is not None else None
+    cid = cid_for_part(view, canonical.part) if view is not None else None
+    if not cid:
+        return DanmakuFetch(source_total=source_total, fetched_total=0, sampled=False, records=[])
+
+    raw = _decode(op.open(_API_DANMAKU_XML.format(cid=cid), timeout=60).read())
+    records = _parse_danmaku_xml(raw)
+    fetched_total = len(records)
+    sampled = source_total is not None and fetched_total < source_total
+    return DanmakuFetch(
+        source_total=source_total, fetched_total=fetched_total, sampled=sampled, records=records
+    )

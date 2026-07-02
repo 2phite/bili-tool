@@ -1,4 +1,7 @@
+import gzip
 import json
+import zlib
+from pathlib import Path
 
 import pytest
 
@@ -13,6 +16,10 @@ from harvest.player_api import (
     select_zh_subtitle,
 )
 from harvest.resolve import Canonical
+
+_DANMAKU_FIXTURE = (
+    Path(__file__).parent / "fixtures" / "bilibili" / "sample_danmaku.xml"
+).read_bytes()
 
 
 def test_cid_for_part_matches_page_number():
@@ -435,4 +442,162 @@ def test_part_segments_accepts_prefetched_view_and_skips_fetch_view():
     assert result is None  # no zh subtitle present
     assert _view_url(canonical) not in opener.requested_urls
     assert opener.requested_urls == [player_url]
+
+
+# --- danmaku acquisition (Task 2) ---
+
+
+def _danmaku_url(cid: int) -> str:
+    from harvest.player_api import _API_DANMAKU_XML
+
+    return _API_DANMAKU_XML.format(cid=cid)
+
+
+def test_decode_plain_utf8_bytes():
+    from harvest.player_api import _decode
+
+    assert _decode(_DANMAKU_FIXTURE) == _DANMAKU_FIXTURE.decode("utf-8")
+
+
+def test_decode_gzip_bytes():
+    from harvest.player_api import _decode
+
+    body = gzip.compress(_DANMAKU_FIXTURE)
+    assert _decode(body) == _DANMAKU_FIXTURE.decode("utf-8")
+
+
+def test_decode_zlib_wrapped_bytes():
+    from harvest.player_api import _decode
+
+    body = zlib.compress(_DANMAKU_FIXTURE)
+    assert _decode(body) == _DANMAKU_FIXTURE.decode("utf-8")
+
+
+def test_decode_raw_deflate_bytes():
+    from harvest.player_api import _decode
+
+    co = zlib.compressobj(wbits=-zlib.MAX_WBITS)
+    body = co.compress(_DANMAKU_FIXTURE) + co.flush()
+    assert _decode(body) == _DANMAKU_FIXTURE.decode("utf-8")
+
+
+def test_decode_raises_on_unrecognized_bytes():
+    from harvest.player_api import _decode
+
+    with pytest.raises(ValueError):
+        _decode(b"\xff\xfe\x00\x01not text or a known codec")
+
+
+def test_parse_danmaku_xml_sorts_and_skips_malformed():
+    from harvest.player_api import RawDanmaku, _parse_danmaku_xml
+
+    records = _parse_danmaku_xml(_DANMAKU_FIXTURE.decode("utf-8"))
+
+    # malformed <d p="1,2"> (too few comma fields) is skipped -> 5 of 6 survive
+    assert len(records) == 5
+    assert all(isinstance(r, RawDanmaku) for r in records)
+    # sorted ascending by content_ts (fixture has 12.5 listed before 3.2)
+    assert [r.content_ts for r in records] == [3.2, 3.2, 8.0, 8.0, 12.5]
+    # only content_ts + text retained; duplicate/near-duplicate content preserved verbatim
+    assert records[0].text == "弹幕测试"
+    assert records[1].text == "弹幕测试"
+    assert records[-1].text == "你好世界"
+
+
+def test_fetch_danmaku_parses_records_and_source_total():
+    from harvest.player_api import fetch_danmaku
+
+    canonical = _canonical(part=1)
+    view_payload = {
+        "code": 0,
+        "data": {
+            "aid": 42, "cid": 100, "title": "T", "desc": "d", "duration": 600,
+            "owner": {"mid": 7, "name": "U"},
+            "stat": {"danmaku": 9999},
+            "pages": [{"page": 1, "cid": 100, "part": "P1", "duration": 600}],
+        },
+    }
+    opener = _FakeOpener({
+        _view_url(canonical): view_payload,
+        _danmaku_url(100): _DANMAKU_FIXTURE,
+    })
+
+    result = fetch_danmaku(canonical, Settings(), opener=opener)
+
+    assert result.source_total == 9999
+    assert result.fetched_total == 5
+    assert len(result.records) == 5
+    assert [r.content_ts for r in result.records] == [3.2, 3.2, 8.0, 8.0, 12.5]
+    # 5 fetched vs a much larger platform-reported total -> sampled
+    assert result.sampled is True
+
+
+def test_fetch_danmaku_not_sampled_when_fetched_meets_source_total():
+    from harvest.player_api import fetch_danmaku
+
+    canonical = _canonical(part=1)
+    view_payload = {
+        "code": 0,
+        "data": {
+            "aid": 42, "cid": 100, "title": "T", "desc": "d", "duration": 600,
+            "owner": {"mid": 7, "name": "U"},
+            "stat": {"danmaku": 5},
+            "pages": [{"page": 1, "cid": 100, "part": "P1", "duration": 600}],
+        },
+    }
+    opener = _FakeOpener({
+        _view_url(canonical): view_payload,
+        _danmaku_url(100): _DANMAKU_FIXTURE,
+    })
+
+    result = fetch_danmaku(canonical, Settings(), opener=opener)
+    assert result.fetched_total == 5
+    assert result.source_total == 5
+    assert result.sampled is False
+
+
+def test_fetch_danmaku_accepts_prefetched_view_and_skips_view_get():
+    """Task 4: when `view` is supplied, fetch_danmaku must NOT hit the view endpoint at all."""
+    from harvest.player_api import fetch_danmaku
+
+    canonical = _canonical(part=1)
+    view = ViewData(aid=42, cid=100, danmaku_count=5, pages=[ViewPage(part=1, cid=100)])
+    opener = _FakeOpener({_danmaku_url(100): _DANMAKU_FIXTURE})
+
+    result = fetch_danmaku(canonical, Settings(), opener=opener, view=view)
+
+    assert _view_url(canonical) not in opener.requested_urls
+    assert opener.requested_urls == [_danmaku_url(100)]
+    assert result.source_total == 5
+    assert result.fetched_total == 5
+
+
+def test_fetch_danmaku_no_cid_returns_empty_result_not_raise():
+    from harvest.player_api import fetch_danmaku
+
+    canonical = _canonical(part=9)  # out of range -> no cid
+    view = ViewData(aid=42, cid=100, danmaku_count=5, pages=[ViewPage(part=1, cid=100)])
+    opener = _FakeOpener({})
+
+    result = fetch_danmaku(canonical, Settings(), opener=opener, view=view)
+
+    assert result.records == []
+    assert result.fetched_total == 0
+    assert result.sampled is False
+    assert result.source_total == 5
+    assert opener.requested_urls == []
+
+
+def test_fetch_danmaku_view_error_returns_empty_result_not_raise():
+    from harvest.player_api import fetch_danmaku
+
+    canonical = _canonical(part=1)
+    opener = _FakeOpener({_view_url(canonical): {"code": -400, "message": "nope"}})
+
+    result = fetch_danmaku(canonical, Settings(), opener=opener)
+
+    assert result.records == []
+    assert result.fetched_total == 0
+    assert result.source_total is None
+    assert result.sampled is False
 

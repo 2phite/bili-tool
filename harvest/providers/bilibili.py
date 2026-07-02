@@ -10,7 +10,14 @@ from urllib.parse import urlparse
 
 from ..config import Settings
 from ..parts import part_url
-from ..player_api import ViewData, ViewError, fetch_view, published_at_iso
+from ..player_api import (
+    DanmakuFetch,
+    ViewData,
+    ViewError,
+    fetch_danmaku,
+    fetch_view,
+    published_at_iso,
+)
 from ..quality import describe_failure, evaluate
 from ..resolve import resolve as _resolve
 from ..subtitles import extract_info, fetch_subtitle_segments, ydl_opts
@@ -61,6 +68,12 @@ class BilibiliProvider:
     def enumerate_parts(self, canonical, settings, *, opener=None) -> int:
         view = self._view(canonical, settings, opener=opener)
         return max(len(view.pages), 1) if view else 1
+
+    def fetch_danmaku(self, canonical, settings, *, opener=None, view=None) -> DanmakuFetch:
+        """Bilibili-only, opt-in acquisition capability -- deliberately NOT on the shared
+        `Provider` Protocol (YouTube has no equivalent). Thin delegation to
+        `player_api.fetch_danmaku`; see there for the not-found/empty-result convention."""
+        return fetch_danmaku(canonical, settings, opener=opener, view=view)
 
     def _part1_segments(self, canonical, settings):
         """#6357 tier-2 input: part 1's subtitle, fetched only for part>1. Best-effort — a

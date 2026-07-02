@@ -13,8 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import Settings
-from .player_api import ViewData, published_at_iso
-from .resolve import Canonical
+from .providers.base import Canonical, SourceMetadata
 from .schema import Bundle, Frame, Meta, Segment, Transcript
 
 
@@ -59,41 +58,22 @@ def chunk(
 
 def build_bundle(
     canonical: Canonical,
-    info: dict,
+    meta: SourceMetadata,
     transcript: Transcript,
     frames: list[Frame],
     settings: Settings,
     *,
-    view: ViewData | None = None,
     vision_model: str | None = None,
 ) -> Bundle:
-    """`view` (web-interface/view) is the metadata source of truth; yt-dlp `info` is the
-    fallback when `view` wasn't fetched (Task 4 threads the real value)."""
-    title = view.title if view else info.get("title")
-    uploader = view.owner_name if view else info.get("uploader")
-    duration = view.duration if view else info.get("duration")
-    uploader_id = str(view.owner_mid) if (view and view.owner_mid is not None) else None
-    description = view.desc if view else info.get("description")
-    published_at = published_at_iso(view.pubdate) if view else None
     return Bundle(
-        platform=canonical.platform,
-        id=canonical.id,
-        part=canonical.part,
-        url=canonical.url,
-        title=title,
-        uploader=uploader,
-        uploader_id=uploader_id,
-        description=description,
-        duration_s=int(duration) if duration else None,
-        published_at=published_at,
-        fetched_at=iso_now(),
-        transcript=transcript,
-        frames=frames,
+        platform=canonical.platform, id=canonical.id, part=canonical.part, url=canonical.url,
+        title=meta.title, uploader=meta.uploader, uploader_id=meta.uploader_id,
+        description=meta.description, duration_s=meta.duration_s, published_at=meta.published_at,
+        fetched_at=iso_now(), transcript=transcript, frames=frames,
         meta=Meta(
             cookies_used=bool(settings.sessdata or settings.cookies_browser),
-            referer_used=True,
-            vision_model=vision_model,
-            tool_version=settings.tool_version,
+            referer_used=(canonical.platform == "bilibili.com"),
+            vision_model=vision_model, tool_version=settings.tool_version,
         ),
     )
 

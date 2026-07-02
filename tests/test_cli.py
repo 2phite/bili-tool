@@ -79,6 +79,16 @@ def test_ingest_subcommand_parses_url_and_all_flags():
     assert args.no_frame_images is True
 
 
+def test_ingest_accepts_lang_flag():
+    args = parse_args(["ingest", "https://youtu.be/dQw4w9WgXcQ", "--lang", "es"])
+    assert args.lang == "es"
+
+
+def test_ingest_lang_defaults_to_none():
+    args = parse_args(["ingest", "https://youtu.be/dQw4w9WgXcQ"])
+    assert args.lang is None
+
+
 def test_probe_subcommand_parses_url_only():
     args = parse_args(["probe", "https://b/video/BV1"])
     assert args.command == "probe"
@@ -148,22 +158,133 @@ def test_ingest_malformed_url_exits_nonzero_with_error_on_stderr(capsys):
     assert captured.err.startswith("error: ")
 
 
-def test_ingest_enumerates_parts_from_view_pages(monkeypatch):
-    """--all-parts on a .com URL must derive its part count from `view.pages`, not yt-dlp."""
+def test_decide_transcript_youtube_reuses_human_sub_no_quality_gate(monkeypatch):
     from harvest import cli
-    from harvest.player_api import ViewData, ViewPage
+    from harvest.providers.base import Canonical, SourceMetadata, SubtitleOutcome
+    from harvest.schema import Segment
+
+    canonical = Canonical("youtube.com", "dQw4w9WgXcQ", 1, "https://youtu.be/dQw4w9WgXcQ")
+    meta = SourceMetadata(platform="youtube.com", id="dQw4w9WgXcQ", title="T", uploader="C",
+                          uploader_id="UCx", description="d", duration_s=100,
+                          published_at="2009-10-25T06:57:33Z", parts=1, part_durations_s=[100])
+
+    class _FakeYT:
+        def fetch_subtitle(self, c, settings, m, *, pinned_lang=None):
+            assert pinned_lang is None
+            return SubtitleOutcome(
+                accepted=True, source="human-sub",
+                source_reason="human-sub (exact-key match: en)", language="en",
+                segments=[Segment(start=0.0, end=1.0, text="hi")], quality_gate=None)
+
+    monkeypatch.setattr(cli, "select_provider", lambda url: _FakeYT())
+    args = parse_args(["ingest", "https://youtu.be/dQw4w9WgXcQ"])
+    t = cli.decide_transcript(canonical, meta, _settings(), args)
+    assert t.source == "human-sub"
+    assert t.language == "en"
+    assert t.quality_gate is None
+    assert t.segments[0].text == "hi"
+
+
+def test_decide_transcript_youtube_falls_back_to_whisper(monkeypatch):
+    from harvest import cli
+    from harvest.providers.base import Canonical, SourceMetadata
+
+    canonical = Canonical("youtube.com", "x", 1, "https://youtu.be/x")
+    meta = SourceMetadata(platform="youtube.com", id="x", title=None, uploader=None,
+                          uploader_id=None, description=None, duration_s=10,
+                          published_at=None, parts=1, part_durations_s=[10])
+
+    class _FakeYT:
+        def fetch_subtitle(self, c, settings, m, *, pinned_lang=None):
+            return None
+
+    monkeypatch.setattr(cli, "select_provider", lambda url: _FakeYT())
+    captured = {}
+
+    def fake_whisper(canonical, settings, args, *, reason, gate=None, lang=None):
+        from harvest.schema import Transcript
+        captured["lang"] = lang
+        return Transcript(source="whisper", source_reason=reason, language=lang, segments=[])
+
+    monkeypatch.setattr(cli, "_whisper", fake_whisper)
+    args = parse_args(["ingest", "https://youtu.be/x"])
+    t = cli.decide_transcript(canonical, meta, _settings(), args)
+    assert t.source == "whisper"
+    assert captured["lang"] is None
+
+
+def test_decide_transcript_bilibili_accepted_outcome_keeps_gate(monkeypatch):
+    # Agnostic path: provider returns an accepted outcome (gate passed) -> Transcript mirrors it.
+    from harvest import cli
+    from harvest.providers.base import Canonical, SourceMetadata, SubtitleOutcome
+    from harvest.schema import QualityGate, Segment
+
+    canonical = Canonical("bilibili.com", "BV1", 1, "https://www.bilibili.com/video/BV1")
+    meta = SourceMetadata(platform="bilibili.com", id="BV1", title="T", uploader="U",
+                          uploader_id="7", description="d", duration_s=100, published_at=None,
+                          parts=1, part_durations_s=[100])
+    gate = QualityGate(passed=True, punct_density=1.0, dup_ratio=0.0, nonzh_ratio=0.0, cps=5.0)
+
+    class _FakeBili:
+        def fetch_subtitle(self, c, settings, m, *, pinned_lang=None):
+            return SubtitleOutcome(accepted=True, source="auto-sub",
+                                   source_reason="auto-sub (quality-gate: passed)", language="zh",
+                                   segments=[Segment(start=0.0, end=1.0, text="你好")], quality_gate=gate)
+
+    monkeypatch.setattr(cli, "select_provider", lambda url: _FakeBili())
+    t = cli.decide_transcript(canonical, meta, _settings(),
+                              parse_args(["ingest", "https://www.bilibili.com/video/BV1"]))
+    assert t.source == "auto-sub" and t.language == "zh" and t.quality_gate is gate
+
+
+def test_decide_transcript_rejected_outcome_falls_back_to_whisper_with_gate(monkeypatch):
+    # accepted=False must carry source_reason + failed gate into the Whisper transcript.
+    from harvest import cli
+    from harvest.providers.base import Canonical, SourceMetadata, SubtitleOutcome
+    from harvest.schema import QualityGate
+
+    canonical = Canonical("bilibili.com", "BV1", 1, "https://www.bilibili.com/video/BV1")
+    meta = SourceMetadata(platform="bilibili.com", id="BV1", title="T", uploader="U",
+                          uploader_id="7", description="d", duration_s=100, published_at=None,
+                          parts=1, part_durations_s=[100])
+    failed = QualityGate(passed=False, punct_density=0.0, dup_ratio=0.9, nonzh_ratio=0.0, cps=1.0)
+
+    class _FakeBili:
+        def fetch_subtitle(self, c, settings, m, *, pinned_lang=None):
+            return SubtitleOutcome(accepted=False, source=None,
+                                   source_reason="subtitle rejected (dup_ratio 0.90)", language=None,
+                                   segments=[], quality_gate=failed)
+
+    monkeypatch.setattr(cli, "select_provider", lambda url: _FakeBili())
+    captured = {}
+
+    def fake_whisper(canonical, settings, args, *, reason, gate=None, lang=None):
+        from harvest.schema import Transcript
+        captured.update(reason=reason, gate=gate, lang=lang)
+        return Transcript(source="whisper", source_reason=reason, language=lang,
+                          quality_gate=gate, segments=[])
+
+    monkeypatch.setattr(cli, "_whisper", fake_whisper)
+    t = cli.decide_transcript(canonical, meta, _settings(),
+                              parse_args(["ingest", "https://www.bilibili.com/video/BV1"]))
+    assert t.source == "whisper" and captured["gate"] is failed
+    assert "rejected" in captured["reason"] and captured["lang"] == "zh"
+
+
+def test_ingest_enumerates_parts_from_view_pages(monkeypatch):
+    """--all-parts on a .com URL must derive its part count from the provider, not yt-dlp."""
+    from harvest import cli
     from harvest.resolve import Canonical
 
     monkeypatch.setattr(
         cli, "resolve", lambda url: Canonical("bilibili.com", "BV1", 1, url)
     )
 
-    view = ViewData(
-        aid=1,
-        cid=100,
-        pages=[ViewPage(part=1, cid=100), ViewPage(part=2, cid=200), ViewPage(part=3, cid=300)],
-    )
-    monkeypatch.setattr(cli, "fetch_view", lambda canonical, settings: view)
+    class _FakeP:
+        def enumerate_parts(self, canonical, settings):
+            return 3
+
+    monkeypatch.setattr(cli, "select_provider", lambda url: _FakeP())
 
     seen_parts = []
 
@@ -177,60 +298,41 @@ def test_ingest_enumerates_parts_from_view_pages(monkeypatch):
     assert seen_parts == [1, 2, 3]
 
 
-def test_process_part_fetches_view_once_and_reuses_it_for_subtitle_path(monkeypatch):
-    """One view fetch per part: process_part must fetch view once and pass it through to both
-    build_bundle and the subtitle-cid path (decide_transcript), never re-fetching."""
+def test_process_part_fetches_metadata_once_and_shares_it(monkeypatch):
     from harvest import cli
-    from harvest.player_api import ViewData, ViewPage
-    from harvest.resolve import Canonical
-    from harvest.schema import Transcript
+    from harvest.providers.base import Canonical, SourceMetadata
+    from harvest.schema import Bundle, Meta, Transcript
 
-    canonical = Canonical("bilibili.com", "BV1", 1, "https://b/video/BV1")
-    view = ViewData(aid=1, cid=100, pages=[ViewPage(part=1, cid=100)])
+    canonical = Canonical("youtube.com", "x", 1, "https://youtu.be/x")
+    meta = SourceMetadata(platform="youtube.com", id="x", title="t", uploader=None,
+                          uploader_id=None, description=None, duration_s=1,
+                          published_at=None, parts=1, part_durations_s=[1])
+    calls = {"meta": 0}
 
-    fetch_calls = []
+    class _FakeP:
+        def fetch_metadata(self, c, settings):
+            calls["meta"] += 1
+            return meta
 
-    def fake_fetch_view(c, settings):
-        fetch_calls.append(c)
-        return view
+    monkeypatch.setattr(cli, "select_provider", lambda url: _FakeP())
+    seen = {}
 
-    monkeypatch.setattr(cli, "fetch_view", fake_fetch_view)
-    monkeypatch.setattr(cli, "extract_info", lambda url, settings: {"title": "t", "duration": 1})
+    def fake_decide(canonical, m, settings, args):
+        seen["decide_meta"] = m
+        return Transcript(source="whisper", source_reason="x", language=None, segments=[])
 
-    decide_transcript_views = []
+    monkeypatch.setattr(cli, "decide_transcript", fake_decide)
 
-    def fake_decide_transcript(info, canonical, settings, args, view=None):
-        decide_transcript_views.append(view)
-        return Transcript(source="whisper", source_reason="x", language="zh", segments=[])
+    def fake_build(canonical, m, transcript, frames, settings, *, vision_model=None):
+        seen["build_meta"] = m
+        return Bundle(platform="youtube.com", id="x", part=1, url=canonical.url, title="t",
+                      fetched_at="2026-07-02T00:00:00Z", transcript=transcript, frames=[],
+                      meta=Meta(cookies_used=False, referer_used=False, tool_version="0"))
 
-    monkeypatch.setattr(cli, "decide_transcript", fake_decide_transcript)
-
-    build_bundle_views = []
-
-    def fake_build_bundle(canonical, info, transcript, frames, settings, *, view=None, vision_model=None):
-        build_bundle_views.append(view)
-        from harvest.schema import Bundle, Meta
-
-        return Bundle(
-            platform="bilibili.com",
-            id="BV1",
-            part=1,
-            url=canonical.url,
-            title="t",
-            uploader=None,
-            duration_s=None,
-            fetched_at="2026-06-30T00:00:00Z",
-            transcript=transcript,
-            frames=[],
-            meta=Meta(cookies_used=False, referer_used=True, tool_version="0"),
-        )
-
-    monkeypatch.setattr(cli, "build_bundle", fake_build_bundle)
+    monkeypatch.setattr(cli, "build_bundle", fake_build)
     monkeypatch.setattr(cli, "write_bundle", lambda *a, **k: "out/path")
 
-    args = parse_args(["ingest", "https://b/video/BV1", "--no-vision"])
+    args = parse_args(["ingest", "https://youtu.be/x", "--no-vision"])
     cli.process_part(canonical, _settings(), args)
-
-    assert len(fetch_calls) == 1  # fetched exactly once
-    assert build_bundle_views == [view]
-    assert decide_transcript_views == [view]
+    assert calls["meta"] == 1
+    assert seen["decide_meta"] is meta and seen["build_meta"] is meta

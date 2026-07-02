@@ -2,8 +2,7 @@ import json
 
 from harvest.config import Settings
 from harvest.merge import build_bundle, chunk, render_markdown, write_bundle
-from harvest.player_api import ViewData
-from harvest.resolve import Canonical
+from harvest.providers.base import Canonical, SourceMetadata
 from harvest.schema import Bundle, Frame, Meta, Segment, Transcript
 
 
@@ -110,27 +109,13 @@ def test_empty_chunks_dropped():
     assert all(c.segments or c.frames for c in chunks)
 
 
-def test_build_bundle_with_view_present_wins_over_ytdlp():
-    view = ViewData(
-        aid=1,
-        cid=2,
-        title="View Title",
-        desc="View description.",
-        duration=123,
-        pubdate=1719561600,
-        owner_mid=999,
-        owner_name="View Owner",
-        pages=[],
+def test_build_bundle_consumes_source_metadata():
+    meta = SourceMetadata(
+        platform="bilibili.com", id="BV1", title="View Title", uploader="View Owner",
+        uploader_id="999", description="View description.", duration_s=123,
+        published_at="2024-06-28T16:00:00+08:00", parts=1, part_durations_s=[123],
     )
-    info = {
-        "title": "ytdlp title",
-        "uploader": "ytdlp uploader",
-        "duration": 456,
-        "description": "ytdlp description",
-    }
-    bundle = build_bundle(
-        _canonical(), info, _transcript(), [], _settings(), view=view
-    )
+    bundle = build_bundle(_canonical(), meta, _transcript(), [], _settings())
     assert bundle.title == "View Title"
     assert bundle.uploader == "View Owner"
     assert bundle.duration_s == 123
@@ -139,21 +124,18 @@ def test_build_bundle_with_view_present_wins_over_ytdlp():
     assert bundle.published_at == "2024-06-28T16:00:00+08:00"
 
 
-def test_build_bundle_with_view_none_falls_back_to_ytdlp():
-    info = {
-        "title": "ytdlp title",
-        "uploader": "ytdlp uploader",
-        "duration": 456,
-        "description": "ytdlp description",
-    }
-    bundle = build_bundle(
-        _canonical(), info, _transcript(), [], _settings(), view=None
+def test_build_bundle_with_missing_metadata_fields_is_none():
+    meta = SourceMetadata(
+        platform="youtube.com", id="x", title="yt title", uploader="yt uploader",
+        uploader_id=None, description="yt description", duration_s=456,
+        published_at=None, parts=1, part_durations_s=[456],
     )
-    assert bundle.title == "ytdlp title"
-    assert bundle.uploader == "ytdlp uploader"
+    bundle = build_bundle(_canonical(), meta, _transcript(), [], _settings())
+    assert bundle.title == "yt title"
+    assert bundle.uploader == "yt uploader"
     assert bundle.duration_s == 456
     assert bundle.uploader_id is None
-    assert bundle.description == "ytdlp description"
+    assert bundle.description == "yt description"
     assert bundle.published_at is None
 
 
